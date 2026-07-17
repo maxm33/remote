@@ -9,6 +9,8 @@ DEST="$USER_HOME/Desktop/remote/saves/76561197960271872"
 REPO="$USER_HOME/Desktop/remote"
 
 echo "Copying savefiles..."
+echo
+echo
 
 cp -rf "$SOURCE/"* "$DEST/"
 
@@ -22,4 +24,6 @@ git commit -m "$COMMIT_MSG"
 
 git push
 
+echo
+echo
 echo "Done."
