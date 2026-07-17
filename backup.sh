@@ -9,7 +9,7 @@ DEST="$USER_HOME/Desktop/remote/saves/EldenRing/76561197960271872"
 REPO="$USER_HOME/Desktop/remote"
 
 echo
-echo "Copying savefiles..."
+echo "Copying savefiles from local to remote..."
 echo
 echo
 
