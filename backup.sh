@@ -8,7 +8,7 @@ SOURCE="$USER_HOME/AppData/Roaming/EldenRing/76561197960271872"
 DEST="$USER_HOME/Desktop/remote/saves/76561197960271872"
 REPO="$USER_HOME/Desktop/remote"
 
-echo -n "Copia dei salvataggi..."
+echo "Copia dei salvataggi..."
 
 cp -rf "$SOURCE/"* "$DEST/"
 
@@ -18,8 +18,8 @@ git add --all
 
 COMMIT_MSG=$(printf "%06d" $(( RANDOM % 1000000 )))
 
-git commit -m "$COMMIT_MSG" --quiet
+git commit -m "$COMMIT_MSG"
 
-git push --quiet
+git push
 
-echo -n "Operazione completata."
+echo "Operazione completata."
