@@ -13,6 +13,12 @@ FILES=(
 )
 
 echo
+echo "Updating savefiles..."
+echo
+
+git pull
+
+echo
 echo "Checking savefile timestamps..."
 echo
 
