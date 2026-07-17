@@ -8,6 +8,7 @@ SOURCE="$USER_HOME/AppData/Roaming/EldenRing/76561197960271872"
 DEST="$USER_HOME/Desktop/remote/saves/76561197960271872"
 REPO="$USER_HOME/Desktop/remote"
 
+echo
 echo "Copying savefiles..."
 echo
 echo
