@@ -16,7 +16,7 @@ cd "$REPO"
 
 git add --all
 
-message=$(printf "%06d" $(( RANDOM % 1000000 )))
+message=$(printf "%06d" $((RANDOM % 1000000)))
 
 git commit --quiet -m "$message"
 
