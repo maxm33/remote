@@ -19,7 +19,7 @@ git add --all
 
 message=$(printf "%06d" $(( RANDOM % 1000000 )))
 
-git commit -m "$message"
+git commit --quiet -m "$message"
 
 git push
 
