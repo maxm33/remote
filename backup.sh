@@ -2,11 +2,9 @@
 
 set -e
 
-USER_HOME="$USERPROFILE"
-
-SOURCE="$USER_HOME/AppData/Roaming/EldenRing/76561197960271872"
-DEST="$USER_HOME/Desktop/remote/saves/EldenRing/76561197960271872"
-REPO="$USER_HOME/Desktop/remote"
+SOURCE="$USERPROFILE/AppData/Roaming/EldenRing/76561197960271872"
+DEST="$USERPROFILE/Desktop/remote/saves/EldenRing/76561197960271872"
+REPO="$USERPROFILE/Desktop/remote"
 
 echo
 echo "Copying savefiles from local to remote..."
@@ -19,9 +17,9 @@ cd "$REPO"
 
 git add --all
 
-COMMIT_MSG=$(printf "%06d" $(( RANDOM % 1000000 )))
+message=$(printf "%06d" $(( RANDOM % 1000000 )))
 
-git commit -m "$COMMIT_MSG"
+git commit -m "$message"
 
 git push
 

@@ -2,15 +2,10 @@
 
 set -e
 
-USER_HOME="$USERPROFILE"
+SOURCE="$USERPROFILE/Desktop/remote/saves/EldenRing/76561197960271872"
+DEST="$USERPROFILE/AppData/Roaming/EldenRing/76561197960271872"
 
-SOURCE="$USER_HOME/Desktop/remote/saves/EldenRing/76561197960271872"
-DEST="$USER_HOME/AppData/Roaming/EldenRing/76561197960271872"
-
-FILES=(
-    "ER0000.sl2"
-    "ER0000.sl2.bak"
-)
+FILES=("ER0000.sl2" "ER0000.sl2.bak")
 
 echo
 echo "Updating savefiles..."
