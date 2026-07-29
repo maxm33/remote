@@ -9,7 +9,6 @@ REPO="$USERPROFILE/Desktop/remote"
 echo
 echo "Copying savefiles from local to remote..."
 echo
-echo
 
 cp -rf "$SOURCE/"* "$DEST/"
 
