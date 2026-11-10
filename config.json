@@ -1,0 +1,10 @@
+{
+  "twitch_account_login": "jenghouse",
+  "twitch_client_id": "",
+  "twitch_client_secret": "",
+  "watch_folder": "C:\\users\\nicco\\downloads",
+  "output_root": "D:\\live\\jenghouse",
+  "category_to_directory": {
+    "Just Chatting": "Just Chatting"
+  }
+}
