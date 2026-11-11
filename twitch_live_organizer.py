@@ -48,7 +48,6 @@ if not OUTPUT_ROOT_VALUE.strip():
 
 WATCH_FOLDER = Path(WATCH_FOLDER_VALUE)
 OUTPUT_ROOT = Path(OUTPUT_ROOT_VALUE)
-ACCOUNT_LOGIN = config_string("twitch_account_login")
 CLIENT_ID = config_string("twitch_client_id")
 CLIENT_SECRET = config_string("twitch_client_secret")
 
@@ -174,10 +173,6 @@ def uninstall_startup():
 def validate_configuration():
     if not WATCH_FOLDER.is_dir():
         raise RuntimeError("Watch folder does not exist: {}".format(WATCH_FOLDER))
-    if not ACCOUNT_LOGIN:
-        raise RuntimeError(
-            "Set 'twitch_account_login' in {}.".format(CONFIG_PATH)
-        )
     if not CLIENT_ID or not CLIENT_SECRET:
         raise RuntimeError(
             "Set 'twitch_client_id' and 'twitch_client_secret' in {}.".format(
