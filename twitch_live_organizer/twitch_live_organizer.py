@@ -5,7 +5,9 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -72,6 +74,7 @@ API_BASE = "https://api.twitch.tv/helix"
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 STARTUP_FILE_NAME = "TwitchLiveOrganizer.cmd"
 LOGGER = logging.getLogger("twitch_live_organizer")
+LOG_FILE_NAME = "organizer.log"
 
 
 class TwitchClient:
@@ -168,6 +171,111 @@ def uninstall_startup():
         print("Removed startup launcher: {}".format(launcher))
     else:
         print("Startup launcher was not installed.")
+
+
+def log_path():
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        log_directory = Path(local_appdata) / "TwitchLiveOrganizer" / "logs"
+    else:
+        log_directory = Path.home() / "AppData" / "Local" / "TwitchLiveOrganizer" / "logs"
+    log_directory.mkdir(parents=True, exist_ok=True)
+    return log_directory / LOG_FILE_NAME
+
+
+def configure_logging():
+    log_file = log_path()
+    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.addHandler(handler)
+    return log_file
+
+
+def open_log(log_file):
+    escaped_path = str(log_file).replace("'", "''")
+    command = "Get-Content -LiteralPath '{}' -Tail 100 -Wait".format(escaped_path)
+    subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-NoExit", "-Command", command],
+        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+    )
+
+
+def run_tray(log_file):
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except ImportError as error:
+        raise RuntimeError(
+            "Tray dependencies are missing. Run install.sh to install them."
+        ) from error
+
+    stop_event = threading.Event()
+    resume_event = threading.Event()
+    resume_event.set()
+
+    image = Image.new("RGB", (64, 64), (35, 35, 35))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((9, 9, 55, 55), fill=(145, 70, 255))
+    draw.text((21, 17), "T", fill=(255, 255, 255))
+
+    def pause_text(_item):
+        return "Pause" if resume_event.is_set() else "Resume"
+
+    def toggle_pause(icon, _item):
+        if resume_event.is_set():
+            resume_event.clear()
+            LOGGER.info("Paused by user.")
+        else:
+            resume_event.set()
+            LOGGER.info("Resumed by user.")
+        icon.update_menu()
+
+    def show_log(_icon, _item):
+        try:
+            open_log(log_file)
+        except OSError:
+            LOGGER.exception("Could not open the log window.")
+
+    def exit_app(icon, _item):
+        LOGGER.info("Stopping by user request.")
+        stop_event.set()
+        resume_event.set()
+        icon.stop()
+
+    icon = pystray.Icon(
+        "twitch_live_organizer",
+        image,
+        "Twitch Live Organizer",
+        menu=pystray.Menu(
+            pystray.MenuItem("Open log", show_log),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(pause_text, toggle_pause),
+            pystray.MenuItem("Exit", exit_app),
+        ),
+    )
+
+    def run_watcher():
+        try:
+            watch(stop_event, resume_event)
+        except Exception:
+            LOGGER.exception("Watcher stopped unexpectedly.")
+            stop_event.set()
+            icon.stop()
+
+    watcher = threading.Thread(
+        target=run_watcher,
+        name="twitch-live-organizer",
+        daemon=True,
+    )
+    watcher.start()
+    try:
+        icon.run()
+    finally:
+        stop_event.set()
+        resume_event.set()
 
 
 def validate_configuration():
@@ -274,16 +382,28 @@ def process_file(path, twitch):
     return True
 
 
-def watch():
+def watch(stop_event=None, resume_event=None):
     validate_configuration()
+    if stop_event is None:
+        stop_event = threading.Event()
+    if resume_event is None:
+        resume_event = threading.Event()
+        resume_event.set()
     twitch = TwitchClient(CLIENT_ID, CLIENT_SECRET)
     observed = {}
     LOGGER.info("Watching %s for MP4 files.", WATCH_FOLDER)
 
-    while True:
+    while not stop_event.is_set():
+        if not resume_event.wait(timeout=0.5):
+            continue
         now = time.monotonic()
         present = set()
         for path in WATCH_FOLDER.iterdir():
+            if stop_event.is_set():
+                break
+            resume_event.wait()
+            if stop_event.is_set():
+                break
             if not path.is_file() or path.suffix.lower() != ".mp4":
                 continue
             present.add(path)
@@ -306,9 +426,11 @@ def watch():
             except (OSError, RuntimeError, urllib.error.URLError, ValueError, KeyError):
                 LOGGER.exception("Could not process %s; will retry.", path)
                 observed[path] = (size, now)
+        if stop_event.is_set():
+            break
         for path in set(observed) - present:
             observed.pop(path, None)
-        time.sleep(POLL_SECONDS)
+        stop_event.wait(POLL_SECONDS)
 
 
 def main():
@@ -335,7 +457,18 @@ def main():
     elif args.uninstall_startup:
         uninstall_startup()
     else:
-        watch()
+        log_file = configure_logging()
+        LOGGER.info("Starting Twitch Live Organizer.")
+        try:
+            validate_configuration()
+        except Exception:
+            LOGGER.exception("Invalid configuration; watcher not started.")
+            raise
+        if os.name == "nt":
+            run_tray(log_file)
+        else:
+            LOGGER.info("Tray controls are available on Windows; running in foreground.")
+            watch()
 
 
 if __name__ == "__main__":
