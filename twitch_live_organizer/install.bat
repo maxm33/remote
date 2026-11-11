@@ -71,7 +71,12 @@ if errorlevel 1 (
 
 echo [ok] Installation complete.
 echo [..] Starting Twitch Live Organizer...
-py -3 -c "import subprocess,sys; from pathlib import Path; executable=Path(sys.executable).with_name('pythonw.exe'); script=Path(sys.argv[1])/'twitch_live_organizer.py'; subprocess.Popen([str(executable if executable.exists() else Path(sys.executable)), str(script)], close_fds=True)" "%~dp0"
+where pyw >nul 2>&1
+if errorlevel 1 (
+    echo [error] Python windowless launcher pyw was not found.
+    goto :error
+)
+start "" pyw -3 "%~dp0%SCRIPT%"
 if errorlevel 1 (
     echo [error] Could not start Twitch Live Organizer.
     goto :error
