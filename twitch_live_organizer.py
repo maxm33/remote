@@ -123,39 +123,21 @@ class TwitchClient:
                 "Twitch API returned HTTP {}: {}".format(error.code, detail)
             ) from error
 
-    def user_id_for_login(self, account_login):
-        login = urllib.parse.urlencode({"login": account_login})
-        users = self._get_json("{}/users?{}".format(API_BASE, login))["data"]
-        if not users:
-            raise RuntimeError(
-                "Twitch account {!r} was not found".format(account_login)
-            )
-        return users[0]["id"]
-
-    def category_for_game_id(self, game_id):
-        if not game_id:
+    def category_from_title(self, title):
+        if not isinstance(title, str):
             return None
-        params = urllib.parse.urlencode({"id": game_id})
-        games = self._get_json("{}/games?{}".format(API_BASE, params))["data"]
-        return games[0]["name"] if games else None
+        title_folded = title.casefold()
+        matches = (
+            category
+            for category in CATEGORY_TO_DIRECTORY
+            if category.casefold() in title_folded
+        )
+        return max(matches, key=len, default=None)
 
-    def video_category(self, video_id):
+    def video_by_id(self, video_id):
         params = urllib.parse.urlencode({"id": video_id})
         videos = self._get_json("{}/videos?{}".format(API_BASE, params))["data"]
-        if not videos:
-            return None
-
-        return self.category_for_game_id(videos[0].get("game_id"))
-
-    def latest_stream_category(self, account_login):
-        user_id = self.user_id_for_login(account_login)
-        params = urllib.parse.urlencode(
-            {"user_id": user_id, "type": "archive", "sort": "time", "first": 1}
-        )
-        videos = self._get_json("{}/videos?{}".format(API_BASE, params))["data"]
-        if not videos:
-            return None
-        return self.category_for_game_id(videos[0].get("game_id"))
+        return videos[0] if videos else None
 
 
 def startup_folder():
@@ -255,36 +237,45 @@ def move_without_overwriting(source, destination):
 
 
 def process_file(path, twitch):
-    video_id = path.stem
-    category = twitch.video_category(video_id)
-    if category is None:
-        LOGGER.info(
-            "Could not resolve a category for VOD %s; using the latest archived "
-            "stream instead.",
-            video_id,
-        )
-        category = twitch.latest_stream_category(ACCOUNT_LOGIN)
-    if not category:
+    video_id = path.stem.split("-", 1)[0]
+    video = twitch.video_by_id(video_id)
+    if video is None:
         LOGGER.warning(
-            "No archived stream category was returned for %s; leaving %s in place.",
-            ACCOUNT_LOGIN,
+            "Twitch returned no VOD for video ID %s; leaving %s in place.",
+            video_id,
             path,
         )
         return False
-    directory_name = CATEGORY_TO_DIRECTORY.get(category)
-    if directory_name is None:
+    title = video.get("title")
+    if not isinstance(title, str) or not title.strip():
         LOGGER.warning(
-            "No directory mapping for Twitch category %r; leaving %s in place.",
-            category,
+            "Twitch returned no usable title for VOD %s; leaving %s in place.",
+            video_id,
             path,
         )
         return False
 
-    destination_directory = OUTPUT_ROOT / directory_name
+    category = twitch.category_from_title(title)
+    if category is None:
+        destination_directory = OUTPUT_ROOT
+        destination_name = title
+        LOGGER.info(
+            "No configured category matched VOD %s; using its title as the "
+            "filename in %s.",
+            video_id,
+            OUTPUT_ROOT,
+        )
+    else:
+        destination_name = CATEGORY_TO_DIRECTORY[category]
+        destination_directory = OUTPUT_ROOT / destination_name
+
     destination_directory.mkdir(parents=True, exist_ok=True)
-    destination = next_destination(destination_directory, directory_name)
+    destination = next_destination(destination_directory, destination_name)
     move_without_overwriting(path, destination)
-    LOGGER.info("Moved %s to %s (category: %s)", path, destination, category)
+    if category is None:
+        LOGGER.info("Moved %s to %s (no category matched).", path, destination)
+    else:
+        LOGGER.info("Moved %s to %s (category: %s)", path, destination, category)
     return True
 
 
