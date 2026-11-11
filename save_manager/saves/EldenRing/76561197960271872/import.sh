@@ -2,7 +2,7 @@
 
 set -e
 
-SOURCE="$USERPROFILE/Desktop/remote/saves/EldenRing/76561197960271872"
+SOURCE="$USERPROFILE/Desktop/remote/save_manager/saves/EldenRing/76561197960271872"
 DEST="$USERPROFILE/AppData/Roaming/EldenRing/76561197960271872"
 
 FILES=("ER0000.sl2" "ER0000.sl2.bak")

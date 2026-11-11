@@ -3,7 +3,7 @@
 set -e
 
 SOURCE="$USERPROFILE/AppData/Roaming/EldenRing/76561197960271872"
-DEST="$USERPROFILE/Desktop/remote/saves/EldenRing/76561197960271872"
+DEST="$USERPROFILE/Desktop/remote/save_manager/saves/EldenRing/76561197960271872"
 REPO="$USERPROFILE/Desktop/remote"
 
 echo
