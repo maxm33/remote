@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Checks that the Windows "py" launcher works, installs Python if needed,
-# then runs: py .\twitch_live_organizer.py --install-startup
-# Run from Git Bash (or any bash on Windows).
 
 set -euo pipefail
 
@@ -9,14 +6,11 @@ SCRIPT="twitch_live_organizer.py"
 
 cd "$(dirname "$0")"
 
-# --- helpers ---------------------------------------------------------------
-
 py_usable() {
     command -v py >/dev/null 2>&1 && py -3 --version >/dev/null 2>&1
 }
 
 refresh_path() {
-    # A fresh install isn't on this session's PATH yet, so add the usual spots.
     command -v cygpath >/dev/null 2>&1 || return 0
     local dir
     for base in "${LOCALAPPDATA:-}" "${PROGRAMFILES:-}"; do
@@ -29,10 +23,8 @@ refresh_path() {
     export PATH
 }
 
-# --- 1. make sure py works ---------------------------------------------------
-
 if py_usable; then
-    echo "[ok] py is installed: $(py -3 --version)"
+    echo "[ok] py is already installed: $(py -3 --version)"
 else
     echo "[..] py not found or not usable, installing Python..."
 
@@ -54,8 +46,6 @@ else
     fi
     echo "[ok] Installed: $(py -3 --version)"
 fi
-
-# --- 2. run the script -------------------------------------------------------
 
 if [ ! -f "$SCRIPT" ]; then
     echo "[error] $SCRIPT not found in $(pwd)" >&2
