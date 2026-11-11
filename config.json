@@ -1,10 +1,12 @@
 {
-  "twitch_account_login": "jenghouse",
+  "twitch_account_login": "Jenghouse",
   "twitch_client_id": "",
   "twitch_client_secret": "",
-  "watch_folder": "C:\\users\\nicco\\downloads",
-  "output_root": "D:\\live\\jenghouse",
+  "watch_folder": "C:\\Users\\Nicco\\Downloads",
+  "output_root": "D:\\Live\\Jenghouse",
   "category_to_directory": {
-    "Just Chatting": "Just Chatting"
+    "Just Chatting": "Indiemaking",
+    "Fallout 4": "Fallout 4",
+    "The Blood of Dawnwalker": "BOTD"
   }
 }
