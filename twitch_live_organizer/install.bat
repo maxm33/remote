@@ -77,9 +77,11 @@ if errorlevel 1 (
     goto :error
 )
 
+echo.
 pause
 exit /b 0
 
 :error
+echo.
 pause
 exit /b 1

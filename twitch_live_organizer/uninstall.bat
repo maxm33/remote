@@ -29,9 +29,11 @@ if errorlevel 1 (
 )
 
 echo [ok] Uninstallation complete.
+echo.
 pause
 exit /b 0
 
 :error
+echo.
 pause
 exit /b 1
