@@ -1,5 +1,6 @@
 import argparse
 import errno
+import getpass
 import json
 import logging
 import os
@@ -41,6 +42,43 @@ def config_string(name):
     return value
 
 
+def configure_twitch_credentials():
+    global CLIENT_ID, CLIENT_SECRET
+
+    if CLIENT_ID and CLIENT_SECRET:
+        print("Twitch API credentials are already configured.")
+        return
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Twitch API credentials are missing. Run install.bat or start this "
+            "script from a terminal to enter them."
+        )
+
+    print("Enter your Twitch application credentials.")
+    client_id = input("Twitch Client ID: ").strip()
+    while not client_id:
+        print("Client ID cannot be empty.")
+        client_id = input("Twitch Client ID: ").strip()
+    client_secret = getpass.getpass("Twitch Client Secret: ").strip()
+    while not client_secret:
+        print("Client Secret cannot be empty.")
+        client_secret = getpass.getpass("Twitch Client Secret: ").strip()
+
+    updated_config = dict(CONFIG)
+    updated_config["twitch_client_id"] = client_id
+    updated_config["twitch_client_secret"] = client_secret
+    temporary_path = CONFIG_PATH.with_suffix(".tmp")
+    with temporary_path.open("w", encoding="utf-8", newline="\n") as config_file:
+        json.dump(updated_config, config_file, indent=2, ensure_ascii=False)
+        config_file.write("\n")
+    temporary_path.replace(CONFIG_PATH)
+
+    CONFIG.update(updated_config)
+    CLIENT_ID = client_id
+    CLIENT_SECRET = client_secret
+    print("Twitch API credentials saved to {}.".format(CONFIG_PATH))
+
+
 WATCH_FOLDER_VALUE = config_string("watch_folder")
 OUTPUT_ROOT_VALUE = config_string("output_root")
 if not WATCH_FOLDER_VALUE.strip():
@@ -52,9 +90,11 @@ WATCH_FOLDER = Path(WATCH_FOLDER_VALUE)
 OUTPUT_ROOT = Path(OUTPUT_ROOT_VALUE)
 CLIENT_ID = config_string("twitch_client_id")
 CLIENT_SECRET = config_string("twitch_client_secret")
+CHANNEL_LOGIN = config_string("twitch_channel_login")
 
 POLL_SECONDS = 5
 STABLE_SECONDS = 15
+ARCHIVE_POLL_SECONDS = 60
 
 if "category_to_directory" not in CONFIG:
     raise RuntimeError(
@@ -141,6 +181,37 @@ class TwitchClient:
         videos = self._get_json("{}/videos?{}".format(API_BASE, params))["data"]
         return videos[0] if videos else None
 
+    def user_id_by_login(self, login):
+        params = urllib.parse.urlencode({"login": login})
+        users = self._get_json("{}/users?{}".format(API_BASE, params))["data"]
+        return users[0]["id"] if users else None
+
+    def archived_videos(self, user_id, known_video_id=None):
+        videos = []
+        cursor = None
+        while True:
+            params = {
+                "user_id": user_id,
+                "type": "archive",
+                "sort": "time",
+                "first": 100,
+            }
+            if cursor:
+                params["after"] = cursor
+            page = self._get_json(
+                "{}/videos?{}".format(API_BASE, urllib.parse.urlencode(params))
+            )
+            page_videos = page["data"]
+            videos.extend(page_videos)
+            if known_video_id and any(
+                video["id"] == known_video_id for video in page_videos
+            ):
+                break
+            cursor = page.get("pagination", {}).get("cursor")
+            if not cursor or not known_video_id:
+                break
+        return videos
+
 
 def startup_folder():
     appdata = os.environ.get("APPDATA")
@@ -173,18 +244,18 @@ def uninstall_startup():
         print("Startup launcher was not installed.")
 
 
-def log_path():
+def app_data_directory():
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         log_directory = Path(local_appdata) / "TwitchLiveOrganizer" / "logs"
     else:
         log_directory = Path.home() / "AppData" / "Local" / "TwitchLiveOrganizer" / "logs"
     log_directory.mkdir(parents=True, exist_ok=True)
-    return log_directory / LOG_FILE_NAME
+    return log_directory
 
 
 def configure_logging():
-    log_file = log_path()
+    log_file = app_data_directory() / LOG_FILE_NAME
     handler = logging.FileHandler(log_file, encoding="utf-8")
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(message)s")
@@ -203,13 +274,162 @@ def open_log(log_file):
     )
 
 
+def archive_state_path():
+    return app_data_directory() / "archive-state.json"
+
+
+def load_archive_state(state_path):
+    if not state_path.exists():
+        return False, None
+    with state_path.open("r", encoding="utf-8") as state_file:
+        state = json.load(state_file)
+    if (
+        not isinstance(state, dict)
+        or state.get("initialized") is not True
+        or (
+            state.get("last_video_id") is not None
+            and not isinstance(state.get("last_video_id"), str)
+        )
+    ):
+        raise RuntimeError("Invalid Twitch archive state in {}.".format(state_path))
+    return True, state["last_video_id"]
+
+
+def save_archive_state(state_path, video_id):
+    temporary_path = state_path.with_suffix(".tmp")
+    with temporary_path.open("w", encoding="utf-8") as state_file:
+        json.dump({"initialized": True, "last_video_id": video_id}, state_file)
+    temporary_path.replace(state_path)
+
+
+class YtDlpLogger:
+    def debug(self, message):
+        LOGGER.debug("%s", message)
+
+    def warning(self, message):
+        LOGGER.warning("%s", message)
+
+    def error(self, message):
+        LOGGER.error("%s", message)
+
+
+def download_archive_video(video, stop_event, resume_event):
+    try:
+        import yt_dlp
+    except ImportError as error:
+        raise RuntimeError(
+            "yt-dlp is missing. Run install.bat to install it."
+        ) from error
+
+    video_id = video["id"]
+    video_url = "https://www.twitch.tv/videos/{}".format(video_id)
+
+    def pause_download(_status):
+        while not stop_event.is_set() and not resume_event.wait(timeout=0.5):
+            pass
+
+    options = {
+        "format": "best[ext=mp4]/best",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "outtmpl": str(WATCH_FOLDER / "%(id)s-%(title)s.%(ext)s"),
+        "quiet": True,
+        "logger": YtDlpLogger(),
+        "progress_hooks": [pause_download],
+    }
+    LOGGER.info("Downloading Twitch VOD %s: %s", video_id, video.get("title", ""))
+    try:
+        with yt_dlp.YoutubeDL(options) as downloader:
+            result = downloader.download([video_url])
+    except yt_dlp.utils.DownloadError as error:
+        raise RuntimeError("Could not download Twitch VOD {}.".format(video_id)) from error
+    if result:
+        raise RuntimeError("yt-dlp failed to download Twitch VOD {}.".format(video_id))
+    LOGGER.info("Finished downloading Twitch VOD %s.", video_id)
+
+
+def watch_archives(stop_event, resume_event):
+    twitch = TwitchClient(CLIENT_ID, CLIENT_SECRET)
+    state_path = archive_state_path()
+    initialized, last_video_id = load_archive_state(state_path)
+    user_id = None
+
+    while not stop_event.is_set():
+        if not resume_event.wait(timeout=0.5):
+            continue
+        try:
+            if user_id is None:
+                user_id = twitch.user_id_by_login(CHANNEL_LOGIN)
+                if user_id is None:
+                    raise RuntimeError(
+                        "Twitch user {!r} was not found.".format(CHANNEL_LOGIN)
+                    )
+                LOGGER.info("Watching Twitch archive for %s.", CHANNEL_LOGIN)
+
+            videos = twitch.archived_videos(
+                user_id,
+                known_video_id=last_video_id if initialized else None,
+            )
+            video_to_download = None
+            if not initialized:
+                last_video_id = videos[0]["id"] if videos else None
+                save_archive_state(state_path, last_video_id)
+                initialized = True
+                if last_video_id is None:
+                    LOGGER.info(
+                        "No existing VOD found for %s; waiting for its first archive.",
+                        CHANNEL_LOGIN,
+                    )
+                else:
+                    LOGGER.info(
+                        "Using existing VOD %s as the initial archive marker.",
+                        last_video_id,
+                    )
+            elif last_video_id is None:
+                video_to_download = videos[0] if videos else None
+            else:
+                marker_index = next(
+                    (
+                        index
+                        for index, video in enumerate(videos)
+                        if video["id"] == last_video_id
+                    ),
+                    None,
+                )
+                if marker_index is None:
+                    LOGGER.warning(
+                        "Saved archive marker %s was not found for %s; "
+                        "not downloading older VODs.",
+                        last_video_id,
+                        CHANNEL_LOGIN,
+                    )
+                    video_to_download = None
+                else:
+                    video_to_download = (
+                        videos[marker_index - 1] if marker_index > 0 else None
+                    )
+
+            if (
+                initialized
+                and not stop_event.is_set()
+                and resume_event.is_set()
+                and video_to_download is not None
+            ):
+                download_archive_video(video_to_download, stop_event, resume_event)
+                last_video_id = video_to_download["id"]
+                save_archive_state(state_path, last_video_id)
+        except (OSError, RuntimeError, urllib.error.URLError, ValueError, KeyError):
+            LOGGER.exception("Could not check the Twitch archive; will retry.")
+        stop_event.wait(ARCHIVE_POLL_SECONDS)
+
+
 def run_tray(log_file):
     try:
         import pystray
         from PIL import Image, ImageDraw
     except ImportError as error:
         raise RuntimeError(
-            "Tray dependencies are missing. Run install.sh to install them."
+            "Tray dependencies are missing. Run install.bat to install them."
         ) from error
 
     stop_event = threading.Event()
@@ -265,12 +485,22 @@ def run_tray(log_file):
             stop_event.set()
             icon.stop()
 
+    def run_archive_watcher():
+        try:
+            watch_archives(stop_event, resume_event)
+        except Exception:
+            LOGGER.exception("Archive watcher stopped unexpectedly.")
+            stop_event.set()
+            icon.stop()
+
     watcher = threading.Thread(
-        target=run_watcher,
-        name="twitch-live-organizer",
-        daemon=True,
+        target=run_watcher, name="twitch-live-organizer", daemon=True
+    )
+    archive_watcher = threading.Thread(
+        target=run_archive_watcher, name="twitch-archive-watcher", daemon=True
     )
     watcher.start()
+    archive_watcher.start()
     try:
         icon.run()
     finally:
@@ -286,6 +516,10 @@ def validate_configuration():
             "Set 'twitch_client_id' and 'twitch_client_secret' in {}.".format(
                 CONFIG_PATH
             )
+        )
+    if not CHANNEL_LOGIN.strip():
+        raise RuntimeError(
+            "'twitch_channel_login' in {} cannot be empty.".format(CONFIG_PATH)
         )
     if not CATEGORY_TO_DIRECTORY:
         raise RuntimeError(
@@ -446,6 +680,11 @@ def main():
         action="store_true",
         help="Remove this script's Windows startup launcher.",
     )
+    actions.add_argument(
+        "--configure-credentials",
+        action="store_true",
+        help="Prompt for Twitch API credentials and save them in config.json.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -456,7 +695,10 @@ def main():
         install_startup()
     elif args.uninstall_startup:
         uninstall_startup()
+    elif args.configure_credentials:
+        configure_twitch_credentials()
     else:
+        configure_twitch_credentials()
         log_file = configure_logging()
         LOGGER.info("Starting Twitch Live Organizer.")
         try:
@@ -468,7 +710,20 @@ def main():
             run_tray(log_file)
         else:
             LOGGER.info("Tray controls are available on Windows; running in foreground.")
-            watch()
+            stop_event = threading.Event()
+            resume_event = threading.Event()
+            resume_event.set()
+            archive_watcher = threading.Thread(
+                target=watch_archives,
+                args=(stop_event, resume_event),
+                name="twitch-archive-watcher",
+                daemon=True,
+            )
+            archive_watcher.start()
+            try:
+                watch(stop_event, resume_event)
+            finally:
+                stop_event.set()
 
 
 if __name__ == "__main__":

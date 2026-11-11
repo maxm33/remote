@@ -55,6 +55,13 @@ if errorlevel 1 (
     goto :error
 )
 
+echo [..] Configuring Twitch API credentials...
+py -3 "%SCRIPT%" --configure-credentials
+if errorlevel 1 (
+    echo [error] Could not configure Twitch API credentials.
+    goto :error
+)
+
 echo [..] Installing startup launcher...
 py -3 "%SCRIPT%" --install-startup
 if errorlevel 1 (
@@ -63,6 +70,13 @@ if errorlevel 1 (
 )
 
 echo [ok] Installation complete.
+echo [..] Starting Twitch Live Organizer...
+py -3 -c "import subprocess,sys; from pathlib import Path; executable=Path(sys.executable).with_name('pythonw.exe'); script=Path(sys.argv[1])/'twitch_live_organizer.py'; subprocess.Popen([str(executable if executable.exists() else Path(sys.executable)), str(script)], close_fds=True)" "%~dp0"
+if errorlevel 1 (
+    echo [error] Could not start Twitch Live Organizer.
+    goto :error
+)
+
 pause
 exit /b 0
 
