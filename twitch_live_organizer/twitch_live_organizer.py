@@ -547,8 +547,8 @@ def watch_archives(stop_event, resume_event):
                 download_archive_video(video_to_download, stop_event, resume_event)
                 last_video_id = video_to_download["id"]
                 save_archive_state(state_path, last_video_id)
-        except Exception:
-            LOGGER.exception("Archive check or download failed; will retry.")
+        except Exception as error:
+            LOGGER.error("Archive check or download failed; will retry: %s", error)
         stop_event.wait(ARCHIVE_POLL_SECONDS)
 
 
@@ -585,8 +585,8 @@ def run_tray(log_file):
     def show_log(_icon, _item):
         try:
             open_log(log_file)
-        except OSError:
-            LOGGER.exception("Could not open the log window.")
+        except OSError as error:
+            LOGGER.error("Could not open the log window: %s", error)
 
     def exit_app(icon, _item):
         LOGGER.info("Stopping by user request.")
@@ -609,16 +609,16 @@ def run_tray(log_file):
     def run_watcher():
         try:
             watch(stop_event, resume_event)
-        except Exception:
-            LOGGER.exception("Watcher stopped unexpectedly.")
+        except Exception as error:
+            LOGGER.error("Watcher stopped unexpectedly: %s", error)
             stop_event.set()
             icon.stop()
 
     def run_archive_watcher():
         try:
             watch_archives(stop_event, resume_event)
-        except Exception:
-            LOGGER.exception("Archive watcher stopped unexpectedly.")
+        except Exception as error:
+            LOGGER.error("Archive watcher stopped unexpectedly: %s", error)
             stop_event.set()
             icon.stop()
 
@@ -656,15 +656,18 @@ def validate_configuration():
             .format(CONFIG_PATH)
         )
     for directory_name in CATEGORY_TO_DIRECTORY.values():
+        relative_directory = Path(directory_name)
         if (
             not directory_name
-            or Path(directory_name).name != directory_name
-            or directory_name in (".", "..")
+            or relative_directory.is_absolute()
+            or relative_directory.drive
+            or relative_directory.root
+            or ".." in relative_directory.parts
+            or not relative_directory.name
         ):
             raise RuntimeError(
-                "Category directory names must be single folder names: {!r}".format(
-                    directory_name
-                )
+                "Category directory paths must be relative to output_root and "
+                "must not escape it: {!r}".format(directory_name)
             )
 
 
@@ -715,10 +718,11 @@ def category_from_title(title):
 
 
 def process_file(path):
-    video_id, separator, title = path.stem.partition("-")
-    if video_id[:1].casefold() == "v" and video_id[1:].isdigit():
-        video_id = video_id[1:]
-    if not separator or not title.strip():
+    filename_stem = path.stem
+    _, separator, title = filename_stem.partition("-")
+    if not separator:
+        title = filename_stem
+    if not title.strip():
         LOGGER.warning(
             "Could not read a title from the downloaded filename; leaving %s in place.",
             path,
@@ -730,14 +734,15 @@ def process_file(path):
         destination_directory = OUTPUT_ROOT
         destination_name = title
         LOGGER.info(
-            "No configured category matched VOD %s; using its title as the "
-            "filename in %s.",
-            video_id,
+            "No configured category matched title %r; using it as the filename "
+            "in %s.",
+            title,
             OUTPUT_ROOT,
         )
     else:
-        destination_name = CATEGORY_TO_DIRECTORY[category]
-        destination_directory = OUTPUT_ROOT / destination_name
+        relative_directory = Path(CATEGORY_TO_DIRECTORY[category])
+        destination_name = relative_directory.name
+        destination_directory = OUTPUT_ROOT / relative_directory
 
     destination_directory.mkdir(parents=True, exist_ok=True)
     destination = next_destination(destination_directory, destination_name)
@@ -789,8 +794,8 @@ def watch(stop_event=None, resume_event=None):
                     observed.pop(path, None)
                 else:
                     observed[path] = (size, now)
-            except Exception:
-                LOGGER.exception("Could not process %s; will retry.", path)
+            except Exception as error:
+                LOGGER.error("Could not process %s; will retry: %s", path, error)
                 observed[path] = (size, now)
         if stop_event.is_set():
             break
@@ -835,9 +840,9 @@ def main():
         LOGGER.info("Starting Twitch Live Organizer.")
         try:
             validate_configuration()
-        except Exception:
-            LOGGER.exception("Invalid configuration; watcher not started.")
-            raise
+        except Exception as error:
+            LOGGER.error("Invalid configuration; watcher not started: %s", error)
+            raise SystemExit(1)
         if os.name == "nt":
             run_tray(log_file)
         else:

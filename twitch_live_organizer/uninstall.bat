@@ -30,7 +30,7 @@ if errorlevel 1 (
 
 echo [ok] Uninstallation complete.
 echo.
-pause
+timeout /t 2 /nobreak >nul
 exit /b 0
 
 :error
