@@ -2,8 +2,14 @@
 
 set -e
 
-SOURCE="$USERPROFILE/AppData/Roaming/EldenRing/76561197960271872"
-DEST="$USERPROFILE/Desktop/remote/save_manager/saves/EldenRing/76561197960271872"
+if [[ $# -ne 1 || -z "$1" || "$1" == */* ]]; then
+    echo "Usage: $0 <game-directory>" >&2
+    exit 1
+fi
+
+GAME="$1"
+SOURCE="$USERPROFILE/AppData/Roaming/$GAME/76561197960271872"
+DEST="$USERPROFILE/Desktop/remote/save_manager/saves/$GAME/76561197960271872"
 REPO="$USERPROFILE/Desktop/remote"
 
 echo
