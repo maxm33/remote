@@ -526,12 +526,25 @@ def watch_archives(stop_event, resume_event):
                     None,
                 )
                 if marker_index is None:
-                    LOGGER.warning(
-                        "Saved archive marker %s was not found for %s; "
-                        "not downloading older VODs.",
-                        last_video_id,
-                        CHANNEL_LOGIN,
-                    )
+                    missing_video_id = last_video_id
+                    last_video_id = videos[0]["id"] if videos else None
+                    save_archive_state(state_path, last_video_id)
+                    if last_video_id is None:
+                        LOGGER.warning(
+                            "Saved archive marker %s was not found for %s and the "
+                            "channel has no VODs; waiting for its next archive.",
+                            missing_video_id,
+                            CHANNEL_LOGIN,
+                        )
+                    else:
+                        LOGGER.warning(
+                            "Saved archive marker %s was not found for %s; using "
+                            "the latest VOD %s as the new marker without "
+                            "downloading older VODs.",
+                            missing_video_id,
+                            CHANNEL_LOGIN,
+                            last_video_id,
+                        )
                     video_to_download = None
                 else:
                     video_to_download = (

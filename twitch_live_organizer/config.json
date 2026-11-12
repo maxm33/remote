@@ -1,11 +1,11 @@
 {
   "twitch_client_id": "",
   "twitch_client_secret": "",
-  "twitch_channel_login": "Jenghouse",
-  "watch_folder": "C:\\Users\\Nicco\\Downloads",
-  "output_root": "D:\\Live\\Jenghouse",
+  "twitch_channel_login": "JengHouse",
+  "watch_folder": "C:\\Users\\nicco\\Downloads",
+  "output_root": "F:\\JengHouse\\Live",
   "category_to_directory": {
-    "Indiemaking": "Indiemaking",
+    "Indiemaking": "Indie Making",
     "Fallout 4": "Fallout 4"
   }
 }
