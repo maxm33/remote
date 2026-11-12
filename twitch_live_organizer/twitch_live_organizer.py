@@ -165,22 +165,6 @@ class TwitchClient:
                 "Twitch API returned HTTP {}: {}".format(error.code, detail)
             ) from error
 
-    def category_from_title(self, title):
-        if not isinstance(title, str):
-            return None
-        title_folded = title.casefold()
-        matches = (
-            category
-            for category in CATEGORY_TO_DIRECTORY
-            if category.casefold() in title_folded
-        )
-        return max(matches, key=len, default=None)
-
-    def video_by_id(self, video_id):
-        params = urllib.parse.urlencode({"id": video_id})
-        videos = self._get_json("{}/videos?{}".format(API_BASE, params))["data"]
-        return videos[0] if videos else None
-
     def user_id_by_login(self, login):
         params = urllib.parse.urlencode({"login": login})
         users = self._get_json("{}/users?{}".format(API_BASE, params))["data"]
@@ -254,9 +238,41 @@ def app_data_directory():
     return log_directory
 
 
+class ProgressFileHandler(logging.FileHandler):
+    PROGRESS_LINE_WIDTH = 256
+
+    def __init__(self, filename, encoding="utf-8"):
+        super().__init__(filename, encoding=encoding)
+        self.progress_offset = None
+
+    def write_progress(self, record, complete=False):
+        self.acquire()
+        try:
+            self.flush()
+            message = self.format(record).encode(self.encoding or "utf-8")
+            if len(message) > self.PROGRESS_LINE_WIDTH:
+                raise RuntimeError(
+                    "Download progress log entry exceeds its fixed width."
+                )
+
+            line = message + b" " * (self.PROGRESS_LINE_WIDTH - len(message))
+            newline = os.linesep.encode("ascii")
+            with open(self.baseFilename, "r+b") as log_file:
+                if self.progress_offset is None:
+                    log_file.seek(0, os.SEEK_END)
+                    self.progress_offset = log_file.tell()
+                log_file.seek(self.progress_offset)
+                log_file.write(line + newline)
+                log_file.flush()
+            if complete:
+                self.progress_offset = None
+        finally:
+            self.release()
+
+
 def configure_logging():
     log_file = app_data_directory() / LOG_FILE_NAME
-    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler = ProgressFileHandler(log_file, encoding="utf-8")
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     )
@@ -267,7 +283,17 @@ def configure_logging():
 
 def open_log(log_file):
     escaped_path = str(log_file).replace("'", "''")
-    command = "Get-Content -LiteralPath '{}' -Tail 100 -Wait".format(escaped_path)
+    command = (
+        "$logPath = '{}'; $lastWrite = [datetime]::MinValue; "
+        "while ($true) {{ "
+        "$writeTime = [System.IO.File]::GetLastWriteTimeUtc($logPath); "
+        "if ($writeTime -ne $lastWrite) {{ "
+        "Clear-Host; "
+        "Get-Content -LiteralPath $logPath -Tail 100 | "
+        "ForEach-Object {{ Write-Host $_.TrimEnd() }}; "
+        "$lastWrite = $writeTime "
+        "}}; Start-Sleep -Milliseconds 250 }}"
+    ).format(escaped_path)
     subprocess.Popen(
         ["powershell.exe", "-NoProfile", "-NoExit", "-Command", command],
         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
@@ -313,6 +339,50 @@ class YtDlpLogger:
         LOGGER.error("%s", message)
 
 
+def format_bytes(size):
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return "{:.1f} {}".format(value, unit)
+        value /= 1024
+
+
+def log_download_progress(message, terminal_progress, complete=False):
+    record = LOGGER.makeRecord(
+        LOGGER.name, logging.INFO, __file__, 0, message, (), None
+    )
+    progress_handlers = [
+        handler
+        for handler in LOGGER.handlers
+        if isinstance(handler, ProgressFileHandler)
+        and record.levelno >= handler.level
+    ]
+    if not progress_handlers:
+        LOGGER.info("%s", message)
+        return
+
+    for handler in progress_handlers:
+        handler.write_progress(record, complete=complete)
+
+
+def finish_download_progress(video_id, message, terminal_progress):
+    log_download_progress(
+        "VOD {} {}".format(video_id, message),
+        terminal_progress,
+        complete=True,
+    )
+
+
+def release_download_progress():
+    for handler in LOGGER.handlers:
+        if isinstance(handler, ProgressFileHandler):
+            handler.acquire()
+            try:
+                handler.progress_offset = None
+            finally:
+                handler.release()
+
+
 def download_archive_video(video, stop_event, resume_event):
     try:
         import yt_dlp
@@ -323,10 +393,53 @@ def download_archive_video(video, stop_event, resume_event):
 
     video_id = video["id"]
     video_url = "https://www.twitch.tv/videos/{}".format(video_id)
+    last_progress_at = [0.0]
+    terminal_progress = sys.stdout is not None and sys.stdout.isatty()
+    last_progress_length = [0]
 
-    def pause_download(_status):
+    def pause_download(status):
         while not stop_event.is_set() and not resume_event.wait(timeout=0.5):
             pass
+        if status.get("status") not in ("downloading", "finished"):
+            return
+
+        downloaded = status.get("downloaded_bytes") or 0
+        total = status.get("total_bytes") or status.get("total_bytes_estimate")
+        now = time.monotonic()
+        if status.get("status") != "finished" and now - last_progress_at[0] < 1:
+            return
+        last_progress_at[0] = now
+
+        if total:
+            fraction = min(max(downloaded / total, 0), 1)
+            filled = int(fraction * 20)
+            bar = "#" * filled + "-" * (20 - filled)
+            progress = "{:.1f}% {} / {}".format(
+                fraction * 100, format_bytes(downloaded), format_bytes(total)
+            )
+        else:
+            bar = "?" * 20
+            progress = "{} / total unknown".format(format_bytes(downloaded))
+
+        speed = status.get("speed")
+        speed_text = " at {}/s".format(format_bytes(speed)) if speed else ""
+        eta = status.get("eta")
+        eta_text = ""
+        if eta is not None:
+            eta_text = " (ETA {:02d}:{:02d})".format(int(eta) // 60, int(eta) % 60)
+        message = "VOD {} download: [{}] {}{}{}".format(
+            video_id,
+            bar,
+            progress,
+            speed_text,
+            eta_text,
+        )
+        if terminal_progress:
+            padding = " " * max(0, last_progress_length[0] - len(message))
+            sys.stdout.write("\r" + message + padding)
+            sys.stdout.flush()
+            last_progress_length[0] = len(message)
+        log_download_progress(message, terminal_progress)
 
     options = {
         "format": "best[ext=mp4]/best",
@@ -342,9 +455,25 @@ def download_archive_video(video, stop_event, resume_event):
         with yt_dlp.YoutubeDL(options) as downloader:
             result = downloader.download([video_url])
     except yt_dlp.utils.DownloadError as error:
-        raise RuntimeError("Could not download Twitch VOD {}.".format(video_id)) from error
+        finish_download_progress(video_id, "download failed.", terminal_progress)
+        raise RuntimeError(
+            "Could not download Twitch VOD {}: {}".format(video_id, error)
+        ) from error
+    except Exception:
+        finish_download_progress(video_id, "download failed.", terminal_progress)
+        raise
+    finally:
+        if terminal_progress and last_progress_length[0]:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
     if result:
-        raise RuntimeError("yt-dlp failed to download Twitch VOD {}.".format(video_id))
+        finish_download_progress(video_id, "download failed.", terminal_progress)
+        raise RuntimeError(
+            "yt-dlp failed to download Twitch VOD {} (exit code {}).".format(
+                video_id, result
+            )
+        )
+    release_download_progress()
     LOGGER.info("Finished downloading Twitch VOD %s.", video_id)
 
 
@@ -418,8 +547,8 @@ def watch_archives(stop_event, resume_event):
                 download_archive_video(video_to_download, stop_event, resume_event)
                 last_video_id = video_to_download["id"]
                 save_archive_state(state_path, last_video_id)
-        except (OSError, RuntimeError, urllib.error.URLError, ValueError, KeyError):
-            LOGGER.exception("Could not check the Twitch archive; will retry.")
+        except Exception:
+            LOGGER.exception("Archive check or download failed; will retry.")
         stop_event.wait(ARCHIVE_POLL_SECONDS)
 
 
@@ -573,26 +702,30 @@ def move_without_overwriting(source, destination):
             raise
 
 
-def process_file(path, twitch):
-    video_id = path.stem.split("-", 1)[0]
-    video = twitch.video_by_id(video_id)
-    if video is None:
+def category_from_title(title):
+    if not isinstance(title, str):
+        return None
+    title_folded = title.casefold()
+    matches = (
+        category
+        for category in CATEGORY_TO_DIRECTORY
+        if category.casefold() in title_folded
+    )
+    return max(matches, key=len, default=None)
+
+
+def process_file(path):
+    video_id, separator, title = path.stem.partition("-")
+    if video_id[:1].casefold() == "v" and video_id[1:].isdigit():
+        video_id = video_id[1:]
+    if not separator or not title.strip():
         LOGGER.warning(
-            "Twitch returned no VOD for video ID %s; leaving %s in place.",
-            video_id,
-            path,
-        )
-        return False
-    title = video.get("title")
-    if not isinstance(title, str) or not title.strip():
-        LOGGER.warning(
-            "Twitch returned no usable title for VOD %s; leaving %s in place.",
-            video_id,
+            "Could not read a title from the downloaded filename; leaving %s in place.",
             path,
         )
         return False
 
-    category = twitch.category_from_title(title)
+    category = category_from_title(title)
     if category is None:
         destination_directory = OUTPUT_ROOT
         destination_name = title
@@ -623,7 +756,6 @@ def watch(stop_event=None, resume_event=None):
     if resume_event is None:
         resume_event = threading.Event()
         resume_event.set()
-    twitch = TwitchClient(CLIENT_ID, CLIENT_SECRET)
     observed = {}
     LOGGER.info("Watching %s for MP4 files.", WATCH_FOLDER)
 
@@ -653,11 +785,11 @@ def watch(stop_event=None, resume_event=None):
                 continue
 
             try:
-                if process_file(path, twitch):
+                if process_file(path):
                     observed.pop(path, None)
                 else:
                     observed[path] = (size, now)
-            except (OSError, RuntimeError, urllib.error.URLError, ValueError, KeyError):
+            except Exception:
                 LOGGER.exception("Could not process %s; will retry.", path)
                 observed[path] = (size, now)
         if stop_event.is_set():
