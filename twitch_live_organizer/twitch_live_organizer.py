@@ -95,6 +95,7 @@ CHANNEL_LOGIN = config_string("twitch_channel_login")
 POLL_SECONDS = 5
 STABLE_SECONDS = 15
 ARCHIVE_POLL_SECONDS = 60
+UPDATE_CHECK_SECONDS = 60 * 60
 
 if "category_to_directory" not in CONFIG:
     raise RuntimeError(
@@ -300,6 +301,86 @@ def open_log(log_file):
         ["powershell.exe", "-NoProfile", "-NoExit", "-Command", command],
         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
     )
+
+
+def watch_for_updates(stop_event):
+    script_directory = Path(__file__).resolve().parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(script_directory),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        repository_root = Path(result.stdout.strip())
+    except (OSError, subprocess.SubprocessError) as error:
+        LOGGER.warning(
+            "Automatic updates unavailable: could not locate Git repository: %s",
+            error,
+        )
+        return
+
+    LOGGER.info("Checking for Git updates every hour.")
+    while not stop_event.wait(UPDATE_CHECK_SECONDS):
+        try:
+            previous_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repository_root),
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+            pull_result = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=str(repository_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+            if pull_result.returncode:
+                details = pull_result.stderr.strip() or pull_result.stdout.strip()
+                LOGGER.warning(
+                    "Git pull failed; will retry at the next check: %s", details
+                )
+                continue
+
+            current_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repository_root),
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+            if current_commit != previous_commit:
+                LOGGER.info(
+                    "Updated from commit %.12s to %.12s; restarting.",
+                    previous_commit,
+                    current_commit,
+                )
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            LOGGER.info("No Git updates available.")
+        except (OSError, subprocess.SubprocessError) as error:
+            LOGGER.error(
+                "Git update check failed; will retry at the next check: %s", error
+            )
+
+
+def start_update_watcher(stop_event):
+    updater = threading.Thread(
+        target=watch_for_updates,
+        args=(stop_event,),
+        name="twitch-live-organizer-updater",
+        daemon=True,
+    )
+    updater.start()
 
 
 def archive_state_path():
@@ -588,6 +669,7 @@ def run_tray(log_file):
     stop_event = threading.Event()
     resume_event = threading.Event()
     resume_event.set()
+    start_update_watcher(stop_event)
 
     image = Image.new("RGB", (64, 64), (35, 35, 35))
     draw = ImageDraw.Draw(image)
@@ -874,6 +956,7 @@ def main():
             stop_event = threading.Event()
             resume_event = threading.Event()
             resume_event.set()
+            start_update_watcher(stop_event)
             archive_watcher = threading.Thread(
                 target=watch_archives,
                 args=(stop_event, resume_event),
