@@ -1,19 +1,19 @@
 import argparse
-import errno
 import getpass
 import json
 import logging
 import os
-import re
-import shutil
 import subprocess
 import sys
 import threading
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
+
+if __package__:
+    from .organizer_core.download_watcher import watch
+    from .organizer_core.logging_utils import ProgressFileHandler
+else:
+    from organizer_core.download_watcher import watch
+    from organizer_core.logging_utils import ProgressFileHandler
 
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
 
@@ -92,9 +92,6 @@ CLIENT_ID = config_string("twitch_client_id")
 CLIENT_SECRET = config_string("twitch_client_secret")
 CHANNEL_LOGIN = config_string("twitch_channel_login")
 
-POLL_SECONDS = 5
-STABLE_SECONDS = 15
-ARCHIVE_POLL_SECONDS = 60
 UPDATE_CHECK_SECONDS = 60 * 60
 
 if "category_to_directory" not in CONFIG:
@@ -111,92 +108,9 @@ if not isinstance(CATEGORY_TO_DIRECTORY, dict) or not all(
         "'category_to_directory' in {} must map strings to strings.".format(CONFIG_PATH)
     )
 
-API_BASE = "https://api.twitch.tv/helix"
-TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 STARTUP_FILE_NAME = "TwitchLiveOrganizer.cmd"
-DOWNLOAD_STAGING_DIRECTORY_NAME = ".twitch-live-organizer-downloads"
 LOGGER = logging.getLogger("twitch_live_organizer")
 LOG_FILE_NAME = "organizer.log"
-
-
-class TwitchClient:
-    def __init__(self, client_id, client_secret):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.access_token = None
-        self.token_expires_at = 0
-
-    def _get_app_token(self):
-        form = urllib.parse.urlencode(
-            {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "grant_type": "client_credentials",
-            }
-        ).encode("ascii")
-        request = urllib.request.Request(
-            TOKEN_URL,
-            data=form,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        self.access_token = data["access_token"]
-        self.token_expires_at = time.time() + int(data["expires_in"]) - 60
-
-    def _get_json(self, url, retry=True):
-        if self.access_token is None or time.time() >= self.token_expires_at:
-            self._get_app_token()
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Client-ID": self.client_id,
-                "Authorization": "Bearer " + self.access_token,
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            if error.code == 401 and retry:
-                self.access_token = None
-                return self._get_json(url, retry=False)
-            detail = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                "Twitch API returned HTTP {}: {}".format(error.code, detail)
-            ) from error
-
-    def user_id_by_login(self, login):
-        params = urllib.parse.urlencode({"login": login})
-        users = self._get_json("{}/users?{}".format(API_BASE, params))["data"]
-        return users[0]["id"] if users else None
-
-    def archived_videos(self, user_id, known_video_id=None):
-        videos = []
-        cursor = None
-        while True:
-            params = {
-                "user_id": user_id,
-                "type": "archive",
-                "sort": "time",
-                "first": 100,
-            }
-            if cursor:
-                params["after"] = cursor
-            page = self._get_json(
-                "{}/videos?{}".format(API_BASE, urllib.parse.urlencode(params))
-            )
-            page_videos = page["data"]
-            videos.extend(page_videos)
-            if known_video_id and any(
-                video["id"] == known_video_id for video in page_videos
-            ):
-                break
-            cursor = page.get("pagination", {}).get("cursor")
-            if not cursor or not known_video_id:
-                break
-        return videos
 
 
 def startup_folder():
@@ -238,38 +152,6 @@ def app_data_directory():
         log_directory = Path.home() / "AppData" / "Local" / "TwitchLiveOrganizer" / "logs"
     log_directory.mkdir(parents=True, exist_ok=True)
     return log_directory
-
-
-class ProgressFileHandler(logging.FileHandler):
-    PROGRESS_LINE_WIDTH = 256
-
-    def __init__(self, filename, encoding="utf-8"):
-        super().__init__(filename, encoding=encoding)
-        self.progress_offset = None
-
-    def write_progress(self, record, complete=False):
-        self.acquire()
-        try:
-            self.flush()
-            message = self.format(record).encode(self.encoding or "utf-8")
-            if len(message) > self.PROGRESS_LINE_WIDTH:
-                raise RuntimeError(
-                    "Download progress log entry exceeds its fixed width."
-                )
-
-            line = message + b" " * (self.PROGRESS_LINE_WIDTH - len(message))
-            newline = os.linesep.encode("ascii")
-            with open(self.baseFilename, "r+b") as log_file:
-                if self.progress_offset is None:
-                    log_file.seek(0, os.SEEK_END)
-                    self.progress_offset = log_file.tell()
-                log_file.seek(self.progress_offset)
-                log_file.write(line + newline)
-                log_file.flush()
-            if complete:
-                self.progress_offset = None
-        finally:
-            self.release()
 
 
 def configure_logging():
@@ -387,274 +269,19 @@ def archive_state_path():
     return app_data_directory() / "archive-state.json"
 
 
-def load_archive_state(state_path):
-    if not state_path.exists():
-        return False, None
-    with state_path.open("r", encoding="utf-8") as state_file:
-        state = json.load(state_file)
-    if (
-        not isinstance(state, dict)
-        or state.get("initialized") is not True
-        or (
-            state.get("last_video_id") is not None
-            and not isinstance(state.get("last_video_id"), str)
-        )
-    ):
-        raise RuntimeError("Invalid Twitch archive state in {}.".format(state_path))
-    return True, state["last_video_id"]
-
-
-def save_archive_state(state_path, video_id):
-    temporary_path = state_path.with_suffix(".tmp")
-    with temporary_path.open("w", encoding="utf-8") as state_file:
-        json.dump({"initialized": True, "last_video_id": video_id}, state_file)
-    temporary_path.replace(state_path)
-
-
-class YtDlpLogger:
-    def debug(self, message):
-        LOGGER.debug("%s", message)
-
-    def warning(self, message):
-        LOGGER.warning("%s", message)
-
-    def error(self, message):
-        LOGGER.error("%s", message)
-
-
-def format_bytes(size):
-    value = float(size)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
-            return "{:.1f} {}".format(value, unit)
-        value /= 1024
-
-
-def log_download_progress(message, terminal_progress, complete=False):
-    record = LOGGER.makeRecord(
-        LOGGER.name, logging.INFO, __file__, 0, message, (), None
+def watch_organizer(stop_event, resume_event):
+    watch(
+        stop_event,
+        resume_event,
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        channel_login=CHANNEL_LOGIN,
+        watch_folder=WATCH_FOLDER,
+        output_root=OUTPUT_ROOT,
+        category_to_directory=CATEGORY_TO_DIRECTORY,
+        archive_state_path=archive_state_path(),
+        logger=LOGGER,
     )
-    progress_handlers = [
-        handler
-        for handler in LOGGER.handlers
-        if isinstance(handler, ProgressFileHandler)
-        and record.levelno >= handler.level
-    ]
-    if not progress_handlers:
-        LOGGER.info("%s", message)
-        return
-
-    for handler in progress_handlers:
-        handler.write_progress(record, complete=complete)
-
-
-def finish_download_progress(video_id, message, terminal_progress):
-    log_download_progress(
-        "VOD {} {}".format(video_id, message),
-        terminal_progress,
-        complete=True,
-    )
-
-
-def release_download_progress():
-    for handler in LOGGER.handlers:
-        if isinstance(handler, ProgressFileHandler):
-            handler.acquire()
-            try:
-                handler.progress_offset = None
-            finally:
-                handler.release()
-
-
-def download_archive_video(video, stop_event, resume_event):
-    try:
-        import yt_dlp
-    except ImportError as error:
-        raise RuntimeError(
-            "yt-dlp is missing. Run install.bat to install it."
-        ) from error
-
-    video_id = video["id"]
-    video_url = "https://www.twitch.tv/videos/{}".format(video_id)
-    last_progress_at = [0.0]
-    terminal_progress = sys.stdout is not None and sys.stdout.isatty()
-    last_progress_length = [0]
-
-    def pause_download(status):
-        while not stop_event.is_set() and not resume_event.wait(timeout=0.5):
-            pass
-        if status.get("status") not in ("downloading", "finished"):
-            return
-
-        downloaded = status.get("downloaded_bytes") or 0
-        total = status.get("total_bytes") or status.get("total_bytes_estimate")
-        now = time.monotonic()
-        if status.get("status") != "finished" and now - last_progress_at[0] < 1:
-            return
-        last_progress_at[0] = now
-
-        if total:
-            fraction = min(max(downloaded / total, 0), 1)
-            filled = int(fraction * 20)
-            bar = "#" * filled + "-" * (20 - filled)
-            progress = "{:.1f}% {} / {}".format(
-                fraction * 100, format_bytes(downloaded), format_bytes(total)
-            )
-        else:
-            bar = "?" * 20
-            progress = "{} / total unknown".format(format_bytes(downloaded))
-
-        speed = status.get("speed")
-        speed_text = " at {}/s".format(format_bytes(speed)) if speed else ""
-        eta = status.get("eta")
-        eta_text = ""
-        if eta is not None:
-            eta_text = " (ETA {:02d}:{:02d})".format(int(eta) // 60, int(eta) % 60)
-        message = "VOD {} download: [{}] {}{}{}".format(
-            video_id,
-            bar,
-            progress,
-            speed_text,
-            eta_text,
-        )
-        if terminal_progress:
-            padding = " " * max(0, last_progress_length[0] - len(message))
-            sys.stdout.write("\r" + message + padding)
-            sys.stdout.flush()
-            last_progress_length[0] = len(message)
-        log_download_progress(message, terminal_progress)
-
-    options = {
-        "format": "best[ext=mp4]/best",
-        "merge_output_format": "mp4",
-        "noplaylist": True,
-        # Download and post-process (the ffmpeg fixup) inside a staging subfolder.
-        # yt-dlp moves the finished file into the watch folder only after every
-        # step is done, so the folder watcher never sees a file still in use.
-        # The staging folder is on the same drive, so that final move is instant.
-        "paths": {
-            "home": str(WATCH_FOLDER),
-            "temp": str(WATCH_FOLDER / DOWNLOAD_STAGING_DIRECTORY_NAME),
-        },
-        # Must stay relative: an absolute template would bypass "paths".
-        "outtmpl": "%(id)s-%(title)s.%(ext)s",
-        "quiet": True,
-        "logger": YtDlpLogger(),
-        "progress_hooks": [pause_download],
-    }
-    LOGGER.info("Downloading Twitch VOD %s: %s", video_id, video.get("title", ""))
-    try:
-        with yt_dlp.YoutubeDL(options) as downloader:
-            result = downloader.download([video_url])
-    except yt_dlp.utils.DownloadError as error:
-        finish_download_progress(video_id, "download failed.", terminal_progress)
-        raise RuntimeError(
-            "Could not download Twitch VOD {}: {}".format(video_id, error)
-        ) from error
-    except Exception:
-        finish_download_progress(video_id, "download failed.", terminal_progress)
-        raise
-    finally:
-        if terminal_progress and last_progress_length[0]:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-    if result:
-        finish_download_progress(video_id, "download failed.", terminal_progress)
-        raise RuntimeError(
-            "yt-dlp failed to download Twitch VOD {} (exit code {}).".format(
-                video_id, result
-            )
-        )
-    release_download_progress()
-    LOGGER.info("Finished downloading Twitch VOD %s.", video_id)
-
-
-def watch_archives(stop_event, resume_event):
-    twitch = TwitchClient(CLIENT_ID, CLIENT_SECRET)
-    state_path = archive_state_path()
-    initialized, last_video_id = load_archive_state(state_path)
-    user_id = None
-
-    while not stop_event.is_set():
-        if not resume_event.wait(timeout=0.5):
-            continue
-        try:
-            if user_id is None:
-                user_id = twitch.user_id_by_login(CHANNEL_LOGIN)
-                if user_id is None:
-                    raise RuntimeError(
-                        "Twitch user {!r} was not found.".format(CHANNEL_LOGIN)
-                    )
-                LOGGER.info("Watching Twitch archive for %s.", CHANNEL_LOGIN)
-
-            videos = twitch.archived_videos(
-                user_id,
-                known_video_id=last_video_id if initialized else None,
-            )
-            video_to_download = None
-            if not initialized:
-                last_video_id = videos[0]["id"] if videos else None
-                save_archive_state(state_path, last_video_id)
-                initialized = True
-                if last_video_id is None:
-                    LOGGER.info(
-                        "No existing VOD found for %s; waiting for its first archive.",
-                        CHANNEL_LOGIN,
-                    )
-                else:
-                    LOGGER.info(
-                        "Using existing VOD %s as the initial archive marker.",
-                        last_video_id,
-                    )
-            elif last_video_id is None:
-                video_to_download = videos[0] if videos else None
-            else:
-                marker_index = next(
-                    (
-                        index
-                        for index, video in enumerate(videos)
-                        if video["id"] == last_video_id
-                    ),
-                    None,
-                )
-                if marker_index is None:
-                    missing_video_id = last_video_id
-                    last_video_id = videos[0]["id"] if videos else None
-                    save_archive_state(state_path, last_video_id)
-                    if last_video_id is None:
-                        LOGGER.warning(
-                            "Saved archive marker %s was not found for %s and the "
-                            "channel has no VODs; waiting for its next archive.",
-                            missing_video_id,
-                            CHANNEL_LOGIN,
-                        )
-                    else:
-                        LOGGER.warning(
-                            "Saved archive marker %s was not found for %s; using "
-                            "the latest VOD %s as the new marker without "
-                            "downloading older VODs.",
-                            missing_video_id,
-                            CHANNEL_LOGIN,
-                            last_video_id,
-                        )
-                    video_to_download = None
-                else:
-                    video_to_download = (
-                        videos[marker_index - 1] if marker_index > 0 else None
-                    )
-
-            if (
-                initialized
-                and not stop_event.is_set()
-                and resume_event.is_set()
-                and video_to_download is not None
-            ):
-                download_archive_video(video_to_download, stop_event, resume_event)
-                last_video_id = video_to_download["id"]
-                save_archive_state(state_path, last_video_id)
-        except Exception as error:
-            LOGGER.error("Archive check or download failed; will retry: %s", error)
-        stop_event.wait(ARCHIVE_POLL_SECONDS)
 
 
 def run_tray(log_file):
@@ -714,28 +341,16 @@ def run_tray(log_file):
 
     def run_watcher():
         try:
-            watch(stop_event, resume_event)
+            watch_organizer(stop_event, resume_event)
         except Exception as error:
             LOGGER.error("Watcher stopped unexpectedly: %s", error)
-            stop_event.set()
-            icon.stop()
-
-    def run_archive_watcher():
-        try:
-            watch_archives(stop_event, resume_event)
-        except Exception as error:
-            LOGGER.error("Archive watcher stopped unexpectedly: %s", error)
             stop_event.set()
             icon.stop()
 
     watcher = threading.Thread(
         target=run_watcher, name="twitch-live-organizer", daemon=True
     )
-    archive_watcher = threading.Thread(
-        target=run_archive_watcher, name="twitch-archive-watcher", daemon=True
-    )
     watcher.start()
-    archive_watcher.start()
     try:
         icon.run()
     finally:
@@ -775,139 +390,6 @@ def validate_configuration():
                 "Category directory paths must be relative to output_root and "
                 "must not escape it: {!r}".format(directory_name)
             )
-
-
-def next_destination(directory, directory_name):
-    safe_name = re.sub(r'[<>:"/\\|?*]', "_", directory_name).rstrip(" .")
-    if not safe_name:
-        raise RuntimeError("Directory name cannot produce a valid file name.")
-    pattern = re.compile(
-        r"^{} #(\d+)\.mp4$".format(re.escape(safe_name)),
-        re.IGNORECASE,
-    )
-    used_ids = set()
-    for existing in directory.iterdir():
-        match = pattern.match(existing.name)
-        if match:
-            used_ids.add(int(match.group(1)))
-    next_id = max(used_ids, default=0) + 1
-    return directory / "{} #{}.mp4".format(safe_name, next_id)
-
-
-def move_without_overwriting(source, destination):
-    try:
-        os.rename(source, destination)
-    except OSError as error:
-        if error.errno != errno.EXDEV:
-            raise
-        try:
-            with source.open("rb") as source_file, destination.open("xb") as target_file:
-                shutil.copyfileobj(source_file, target_file)
-            shutil.copystat(source, destination)
-            source.unlink()
-        except OSError:
-            if destination.exists():
-                destination.unlink()
-            raise
-
-
-def category_from_title(title):
-    if not isinstance(title, str):
-        return None
-    title_folded = title.casefold()
-    matches = (
-        category
-        for category in CATEGORY_TO_DIRECTORY
-        if category.casefold() in title_folded
-    )
-    return max(matches, key=len, default=None)
-
-
-def process_file(path):
-    filename_stem = path.stem
-    _, separator, title = filename_stem.partition("-")
-    if not separator:
-        title = filename_stem
-    if not title.strip():
-        LOGGER.warning(
-            "Could not read a title from the downloaded filename; leaving %s in place.",
-            path,
-        )
-        return False
-
-    category = category_from_title(title)
-    if category is None:
-        destination_directory = OUTPUT_ROOT
-        destination_name = title
-        LOGGER.info(
-            "No configured category matched title %r; using it as the filename "
-            "in %s.",
-            title,
-            OUTPUT_ROOT,
-        )
-    else:
-        relative_directory = Path(CATEGORY_TO_DIRECTORY[category])
-        destination_name = relative_directory.name
-        destination_directory = OUTPUT_ROOT / relative_directory
-
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    destination = next_destination(destination_directory, destination_name)
-    move_without_overwriting(path, destination)
-    if category is None:
-        LOGGER.info("Moved %s to %s (no category matched).", path, destination)
-    else:
-        LOGGER.info("Moved %s to %s (category: %s)", path, destination, category)
-    return True
-
-
-def watch(stop_event=None, resume_event=None):
-    validate_configuration()
-    if stop_event is None:
-        stop_event = threading.Event()
-    if resume_event is None:
-        resume_event = threading.Event()
-        resume_event.set()
-    observed = {}
-    LOGGER.info("Watching %s for MP4 files.", WATCH_FOLDER)
-
-    while not stop_event.is_set():
-        if not resume_event.wait(timeout=0.5):
-            continue
-        now = time.monotonic()
-        present = set()
-        for path in WATCH_FOLDER.iterdir():
-            if stop_event.is_set():
-                break
-            resume_event.wait()
-            if stop_event.is_set():
-                break
-            if not path.is_file() or path.suffix.lower() != ".mp4":
-                continue
-            present.add(path)
-            try:
-                size = path.stat().st_size
-            except FileNotFoundError:
-                continue
-            previous = observed.get(path)
-            if previous is None or previous[0] != size:
-                observed[path] = (size, now)
-                continue
-            if now - previous[1] < STABLE_SECONDS:
-                continue
-
-            try:
-                if process_file(path):
-                    observed.pop(path, None)
-                else:
-                    observed[path] = (size, now)
-            except Exception as error:
-                LOGGER.error("Could not process %s; will retry: %s", path, error)
-                observed[path] = (size, now)
-        if stop_event.is_set():
-            break
-        for path in set(observed) - present:
-            observed.pop(path, None)
-        stop_event.wait(POLL_SECONDS)
 
 
 def main():
@@ -957,15 +439,8 @@ def main():
             resume_event = threading.Event()
             resume_event.set()
             start_update_watcher(stop_event)
-            archive_watcher = threading.Thread(
-                target=watch_archives,
-                args=(stop_event, resume_event),
-                name="twitch-archive-watcher",
-                daemon=True,
-            )
-            archive_watcher.start()
             try:
-                watch(stop_event, resume_event)
+                watch_organizer(stop_event, resume_event)
             finally:
                 stop_event.set()
 
