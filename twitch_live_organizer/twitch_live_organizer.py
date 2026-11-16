@@ -10,9 +10,17 @@ from pathlib import Path
 
 if __package__:
     from .organizer_core.download_watcher import watch
+    from .organizer_core.instance_lock import (
+        InstanceAlreadyRunningError,
+        SingleInstanceLock,
+    )
     from .organizer_core.logging_utils import ProgressFileHandler
 else:
     from organizer_core.download_watcher import watch
+    from organizer_core.instance_lock import (
+        InstanceAlreadyRunningError,
+        SingleInstanceLock,
+    )
     from organizer_core.logging_utils import ProgressFileHandler
 
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
@@ -423,26 +431,35 @@ def main():
     elif args.configure_credentials:
         configure_twitch_credentials()
     else:
-        configure_twitch_credentials()
-        log_file = configure_logging()
-        LOGGER.info("Starting Twitch Live Organizer.")
         try:
-            validate_configuration()
-        except Exception as error:
-            LOGGER.error("Invalid configuration; watcher not started: %s", error)
+            with SingleInstanceLock(app_data_directory() / "organizer.lock"):
+                configure_twitch_credentials()
+                log_file = configure_logging()
+                LOGGER.info("Starting Twitch Live Organizer.")
+                try:
+                    validate_configuration()
+                except Exception as error:
+                    LOGGER.error(
+                        "Invalid configuration; watcher not started: %s", error
+                    )
+                    raise SystemExit(1)
+                if os.name == "nt":
+                    run_tray(log_file)
+                else:
+                    LOGGER.info(
+                        "Tray controls are available on Windows; running in foreground."
+                    )
+                    stop_event = threading.Event()
+                    resume_event = threading.Event()
+                    resume_event.set()
+                    start_update_watcher(stop_event)
+                    try:
+                        watch_organizer(stop_event, resume_event)
+                    finally:
+                        stop_event.set()
+        except InstanceAlreadyRunningError as error:
+            LOGGER.error("%s", error)
             raise SystemExit(1)
-        if os.name == "nt":
-            run_tray(log_file)
-        else:
-            LOGGER.info("Tray controls are available on Windows; running in foreground.")
-            stop_event = threading.Event()
-            resume_event = threading.Event()
-            resume_event.set()
-            start_update_watcher(stop_event)
-            try:
-                watch_organizer(stop_event, resume_event)
-            finally:
-                stop_event.set()
 
 
 if __name__ == "__main__":

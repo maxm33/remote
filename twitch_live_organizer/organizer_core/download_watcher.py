@@ -12,7 +12,7 @@ from .twitch_api import (
     save_archive_state,
 )
 
-POLL_SECONDS = 5
+POLL_SECONDS = 15
 ARCHIVE_POLL_SECONDS = 60
 DOWNLOAD_STAGING_DIRECTORY_NAME = ".twitch-live-organizer-downloads"
 
