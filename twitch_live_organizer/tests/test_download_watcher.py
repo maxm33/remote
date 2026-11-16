@@ -95,7 +95,9 @@ class DownloadWatcherTests(unittest.TestCase):
             root = Path(temporary_directory)
             output_root = root / "output"
             staging_directory = (
-                output_root / download_watcher.DOWNLOAD_STAGING_DIRECTORY_NAME
+                root
+                / "twitch_live_organizer"
+                / download_watcher.DOWNLOAD_STAGING_DIRECTORY_NAME
             )
             staging_directory.mkdir(parents=True)
             source = staging_directory / "video-1-Game.mp4"
@@ -141,6 +143,7 @@ class DownloadWatcherTests(unittest.TestCase):
                         client_id="client",
                         client_secret="secret",
                         channel_login="channel",
+                        download_directory=staging_directory,
                         output_root=output_root,
                         category_to_directory={"Game": "Games"},
                         archive_state_path=state_path,

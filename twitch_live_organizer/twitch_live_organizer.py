@@ -9,14 +9,20 @@ import threading
 from pathlib import Path
 
 if __package__:
-    from .organizer_core.download_watcher import watch
+    from .organizer_core.download_watcher import (
+        DOWNLOAD_STAGING_DIRECTORY_NAME,
+        watch,
+    )
     from .organizer_core.instance_lock import (
         InstanceAlreadyRunningError,
         SingleInstanceLock,
     )
     from .organizer_core.logging_utils import ProgressFileHandler
 else:
-    from organizer_core.download_watcher import watch
+    from organizer_core.download_watcher import (
+        DOWNLOAD_STAGING_DIRECTORY_NAME,
+        watch,
+    )
     from organizer_core.instance_lock import (
         InstanceAlreadyRunningError,
         SingleInstanceLock,
@@ -173,14 +179,53 @@ def open_log(log_file):
     escaped_path = str(log_file).replace("'", "''")
     command = (
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-        "$logPath = '{}'; $lastWrite = [datetime]::MinValue; "
+        "$logPath = '{}'; "
+        "$lastWrite = [datetime]::MinValue; $lastLength = -1L; "
+        "$progressPattern = ' INFO VOD .* download: \\['; "
         "while ($true) {{ "
         "$writeTime = [System.IO.File]::GetLastWriteTimeUtc($logPath); "
+        "$length = (Get-Item -LiteralPath $logPath).Length; "
         "if ($writeTime -ne $lastWrite) {{ "
+        "$allLines = @(Get-Content -LiteralPath $logPath -Tail 100 -Encoding UTF8); "
+        "$progressLines = @($allLines | Where-Object {{ $_ -match $progressPattern }}); "
+        "$progressLine = ''; "
+        "if ($progressLines.Count -gt 0) {{ "
+        "$progressLine = $progressLines[-1].TrimEnd() "
+        "}}; "
+        "$windowWidth = [Console]::WindowWidth; "
+        "$lineWidth = [Math]::Max(0, $windowWidth - 1); "
+        "if ($progressLine.Length -gt $lineWidth) {{ "
+        "$progressLine = $progressLine.Substring(0, $lineWidth) "
+        "}}; "
+        "$progressLine = $progressLine.PadRight($lineWidth); "
+        "if ($length -ne $lastLength) {{ "
+        "$windowHeight = [Console]::WindowHeight; "
+        "$maxLogLines = [Math]::Max(0, $windowHeight - 2); "
+        "$logLines = @($allLines | Where-Object {{ $_ -notmatch $progressPattern }} "
+        "| Select-Object -Last $maxLogLines); "
         "Clear-Host; "
-        "Get-Content -LiteralPath $logPath -Tail 100 -Encoding UTF8 | "
-        "ForEach-Object {{ Write-Host $_.TrimEnd() }}; "
-        "$lastWrite = $writeTime "
+        "[Console]::SetCursorPosition(0, 0); "
+        "[Console]::Write($progressLine); "
+        "$row = 1; "
+        "foreach ($line in $logLines) {{ "
+        "if ($row -ge $windowHeight) {{ break }}; "
+        "$line = $line.TrimEnd(); "
+        "if ($line.Length -gt $lineWidth) {{ "
+        "$line = $line.Substring(0, $lineWidth) "
+        "}}; "
+        "[Console]::SetCursorPosition(0, $row); "
+        "[Console]::Write($line.PadRight($lineWidth)); "
+        "$row++ "
+        "}}; "
+        "[Console]::SetCursorPosition(0, [Math]::Min($row, $windowHeight - 1)) "
+        "}} else {{ "
+        "$cursorLeft = [Console]::CursorLeft; "
+        "$cursorTop = [Console]::CursorTop; "
+        "[Console]::SetCursorPosition(0, 0); "
+        "[Console]::Write($progressLine); "
+        "[Console]::SetCursorPosition($cursorLeft, $cursorTop) "
+        "}}; "
+        "$lastWrite = $writeTime; $lastLength = $length "
         "}}; Start-Sleep -Milliseconds 250 }}"
     ).format(escaped_path)
     subprocess.Popen(
@@ -280,6 +325,9 @@ def watch_organizer(stop_event, resume_event):
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET,
         channel_login=CHANNEL_LOGIN,
+        download_directory=(
+            Path(__file__).resolve().parent / DOWNLOAD_STAGING_DIRECTORY_NAME
+        ),
         output_root=OUTPUT_ROOT,
         category_to_directory=CATEGORY_TO_DIRECTORY,
         archive_state_path=archive_state_path(),

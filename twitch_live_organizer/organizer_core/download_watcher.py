@@ -214,6 +214,7 @@ def watch(
     client_id,
     client_secret,
     channel_login,
+    download_directory,
     output_root,
     category_to_directory,
     archive_state_path,
@@ -221,9 +222,7 @@ def watch(
 ):
     twitch = TwitchClient(client_id, client_secret)
     state_path = Path(archive_state_path)
-    download_directory = (
-        Path(output_root) / DOWNLOAD_STAGING_DIRECTORY_NAME
-    ).resolve()
+    download_directory = Path(download_directory).resolve()
     download_directory.mkdir(parents=True, exist_ok=True)
     initialized, last_video_id, pending_downloads = load_archive_state(state_path)
     pending_downloads = [
