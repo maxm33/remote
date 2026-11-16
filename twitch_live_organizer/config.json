@@ -2,7 +2,6 @@
   "twitch_client_id": "",
   "twitch_client_secret": "",
   "twitch_channel_login": "JengHouse",
-  "watch_folder": "C:\\Users\\nicco\\Downloads",
   "output_root": "F:\\JengHouse\\Live",
   "category_to_directory": {
     "Indiemaking": "Indie Making",

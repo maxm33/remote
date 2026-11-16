@@ -28,22 +28,37 @@ class TwitchStub:
 
 
 class DownloadWatcherTests(unittest.TestCase):
-    def test_pending_paths_must_be_mp4s_in_the_watch_folder(self):
+    def test_pending_paths_must_be_mp4s_in_the_staging_directory(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            watch_folder = root / "watch"
-            watch_folder.mkdir()
+            staging_directory = root / "staging"
+            staging_directory.mkdir()
             outside_path = root / "other.mp4"
 
             with self.assertRaises(RuntimeError):
                 download_watcher._validated_download_path(
-                    outside_path, watch_folder
+                    outside_path, staging_directory
                 )
+
+    def test_existing_pending_downloads_outside_staging_remain_supported(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            staging_directory = root / "staging"
+            staging_directory.mkdir()
+            legacy_path = root / "old-watch-folder" / "video-1-Game.mp4"
+
+            self.assertEqual(
+                download_watcher._validated_download_path(
+                    legacy_path, staging_directory, allow_legacy=True
+                ),
+                legacy_path.resolve(),
+            )
 
     def test_completed_output_hook_reports_final_mp4(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
-            watch_folder = Path(temporary_directory)
-            output = watch_folder / "video-1-Game.mp4"
+            staging_directory = Path(temporary_directory) / ".staging"
+            staging_directory.mkdir()
+            output = staging_directory / "video-1-Game.mp4"
             output.write_bytes(b"video")
             options_seen = {}
 
@@ -77,23 +92,31 @@ class DownloadWatcherTests(unittest.TestCase):
                     {"id": "video-1", "title": "Game"},
                     threading.Event(),
                     resume_event,
-                    watch_folder,
+                    staging_directory,
                     logging.getLogger("test-yt-dlp"),
                     lambda _video_id, path: reported_paths.append(path),
                 )
 
             self.assertEqual(result, [output])
             self.assertEqual(reported_paths, [output])
+            self.assertEqual(options_seen["paths"]["home"], str(staging_directory))
+            self.assertEqual(
+                options_seen["paths"]["temp"], str(staging_directory / ".tmp")
+            )
 
     def test_failed_file_move_is_retried_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            watch_folder = root / "watch"
-            watch_folder.mkdir()
             output_root = root / "output"
-            source = watch_folder / "video-1-Game.mp4"
+            staging_directory = (
+                output_root / download_watcher.DOWNLOAD_STAGING_DIRECTORY_NAME
+            )
+            staging_directory.mkdir(parents=True)
+            source = staging_directory / "video-1-Game.mp4"
             source.write_bytes(b"video")
-            unrelated = watch_folder / "manual.mp4"
+            legacy_folder = root / "old-watch-folder"
+            legacy_folder.mkdir()
+            unrelated = legacy_folder / "manual.mp4"
             unrelated.write_bytes(b"unrelated")
             state_path = root / "archive-state.json"
             save_archive_state(
@@ -132,7 +155,6 @@ class DownloadWatcherTests(unittest.TestCase):
                         client_id="client",
                         client_secret="secret",
                         channel_login="channel",
-                        watch_folder=watch_folder,
                         output_root=output_root,
                         category_to_directory={"Game": "Games"},
                         archive_state_path=state_path,

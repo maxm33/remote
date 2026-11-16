@@ -87,14 +87,10 @@ def configure_twitch_credentials():
     print("Twitch API credentials saved to {}.".format(CONFIG_PATH))
 
 
-WATCH_FOLDER_VALUE = config_string("watch_folder")
 OUTPUT_ROOT_VALUE = config_string("output_root")
-if not WATCH_FOLDER_VALUE.strip():
-    raise RuntimeError("'watch_folder' in {} cannot be empty.".format(CONFIG_PATH))
 if not OUTPUT_ROOT_VALUE.strip():
     raise RuntimeError("'output_root' in {} cannot be empty.".format(CONFIG_PATH))
 
-WATCH_FOLDER = Path(WATCH_FOLDER_VALUE)
 OUTPUT_ROOT = Path(OUTPUT_ROOT_VALUE)
 CLIENT_ID = config_string("twitch_client_id")
 CLIENT_SECRET = config_string("twitch_client_secret")
@@ -284,7 +280,6 @@ def watch_organizer(stop_event, resume_event):
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET,
         channel_login=CHANNEL_LOGIN,
-        watch_folder=WATCH_FOLDER,
         output_root=OUTPUT_ROOT,
         category_to_directory=CATEGORY_TO_DIRECTORY,
         archive_state_path=archive_state_path(),
@@ -367,8 +362,6 @@ def run_tray(log_file):
 
 
 def validate_configuration():
-    if not WATCH_FOLDER.is_dir():
-        raise RuntimeError("Watch folder does not exist: {}".format(WATCH_FOLDER))
     if not CLIENT_ID or not CLIENT_SECRET:
         raise RuntimeError(
             "Set 'twitch_client_id' and 'twitch_client_secret' in {}.".format(

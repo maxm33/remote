@@ -75,7 +75,7 @@ def download_archive_video(
     video,
     stop_event,
     resume_event,
-    watch_folder,
+    download_directory,
     logger,
     on_download,
 ):
@@ -92,7 +92,9 @@ def download_archive_video(
     terminal_progress = sys.stdout is not None and sys.stdout.isatty()
     last_progress_length = [0]
     downloaded_paths = []
-    watch_folder = Path(watch_folder)
+    download_directory = Path(download_directory)
+    download_directory.mkdir(parents=True, exist_ok=True)
+    temporary_directory = download_directory / ".tmp"
 
     def pause_download(status):
         while not stop_event.is_set() and not resume_event.wait(timeout=0.5):
@@ -141,7 +143,7 @@ def download_archive_video(
     def record_download(path):
         downloaded_path = Path(path)
         if not downloaded_path.is_absolute():
-            downloaded_path = watch_folder / downloaded_path
+            downloaded_path = download_directory / downloaded_path
         downloaded_path = downloaded_path.resolve()
         downloaded_paths.append(downloaded_path)
         if downloaded_path.suffix.lower() == ".mp4":
@@ -152,8 +154,8 @@ def download_archive_video(
         "merge_output_format": "mp4",
         "noplaylist": True,
         "paths": {
-            "home": str(watch_folder),
-            "temp": str(watch_folder / DOWNLOAD_STAGING_DIRECTORY_NAME),
+            "home": str(download_directory),
+            "temp": str(temporary_directory),
         },
         "outtmpl": "%(id)s-%(title)s.%(ext)s",
         "quiet": True,
@@ -189,14 +191,16 @@ def download_archive_video(
     return downloaded_paths
 
 
-def _validated_download_path(path, watch_folder):
+def _validated_download_path(path, download_directory, allow_legacy=False):
     path = Path(path)
     if not path.is_absolute():
-        path = Path(watch_folder) / path
+        path = Path(download_directory) / path
     path = path.resolve()
-    if path.suffix.lower() != ".mp4" or path.parent != Path(watch_folder).resolve():
+    if path.suffix.lower() != ".mp4" or (
+        path.parent != Path(download_directory).resolve() and not allow_legacy
+    ):
         raise RuntimeError(
-            "Pending download is not an MP4 in the configured watch folder: {}."
+            "Pending download is not an MP4 in the download staging directory: {}."
             .format(path)
         )
     return path
@@ -209,7 +213,6 @@ def watch(
     client_id,
     client_secret,
     channel_login,
-    watch_folder,
     output_root,
     category_to_directory,
     archive_state_path,
@@ -217,10 +220,17 @@ def watch(
 ):
     twitch = TwitchClient(client_id, client_secret)
     state_path = Path(archive_state_path)
+    download_directory = (
+        Path(output_root) / DOWNLOAD_STAGING_DIRECTORY_NAME
+    ).resolve()
+    download_directory.mkdir(parents=True, exist_ok=True)
     initialized, last_video_id, pending_downloads = load_archive_state(state_path)
     pending_downloads = [
         PendingDownload(
-            pending.video_id, _validated_download_path(pending.path, watch_folder)
+            pending.video_id,
+            _validated_download_path(
+                pending.path, download_directory, allow_legacy=True
+            ),
         )
         for pending in pending_downloads
     ]
@@ -235,7 +245,7 @@ def watch(
 
     def record_download(video_id, path):
         nonlocal last_video_id
-        path = _validated_download_path(path, watch_folder)
+        path = _validated_download_path(path, download_directory)
         pending = PendingDownload(video_id, path)
         if pending not in pending_downloads:
             pending_downloads.append(pending)
@@ -346,7 +356,7 @@ def watch(
                         video_to_download,
                         stop_event,
                         resume_event,
-                        watch_folder,
+                        download_directory,
                         logger,
                         record_download,
                     )
