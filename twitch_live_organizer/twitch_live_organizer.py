@@ -175,6 +175,22 @@ def configure_logging():
     return log_file
 
 
+def clear_log_file(log_file):
+    log_path = Path(log_file).resolve()
+    handler = next(
+        (
+            handler
+            for handler in LOGGER.handlers
+            if isinstance(handler, ProgressFileHandler)
+            and Path(handler.baseFilename).resolve() == log_path
+        ),
+        None,
+    )
+    if handler is None:
+        raise RuntimeError("No active log handler found for {}.".format(log_path))
+    handler.clear_log()
+
+
 def open_log(log_file):
     escaped_path = str(log_file).replace("'", "''")
     command = (
@@ -200,15 +216,13 @@ def open_log(log_file):
         "$progressLine = $progressLine.PadRight($lineWidth); "
         "if ($length -ne $lastLength) {{ "
         "$windowHeight = [Console]::WindowHeight; "
-        "$maxLogLines = [Math]::Max(0, $windowHeight - 2); "
+        "$maxLogLines = [Math]::Max(0, $windowHeight - 1); "
         "$logLines = @($allLines | Where-Object {{ $_ -notmatch $progressPattern }} "
         "| Select-Object -Last $maxLogLines); "
         "Clear-Host; "
-        "[Console]::SetCursorPosition(0, 0); "
-        "[Console]::Write($progressLine); "
-        "$row = 1; "
+        "$row = 0; "
         "foreach ($line in $logLines) {{ "
-        "if ($row -ge $windowHeight) {{ break }}; "
+        "if ($row -ge $windowHeight - 1) {{ break }}; "
         "$line = $line.TrimEnd(); "
         "if ($line.Length -gt $lineWidth) {{ "
         "$line = $line.Substring(0, $lineWidth) "
@@ -217,11 +231,14 @@ def open_log(log_file):
         "[Console]::Write($line.PadRight($lineWidth)); "
         "$row++ "
         "}}; "
-        "[Console]::SetCursorPosition(0, [Math]::Min($row, $windowHeight - 1)) "
+        "$progressRow = [Math]::Min($row, $windowHeight - 1); "
+        "[Console]::SetCursorPosition(0, $progressRow); "
+        "[Console]::Write($progressLine); "
+        "[Console]::SetCursorPosition(0, [Math]::Min($progressRow + 1, $windowHeight - 1)) "
         "}} else {{ "
         "$cursorLeft = [Console]::CursorLeft; "
         "$cursorTop = [Console]::CursorTop; "
-        "[Console]::SetCursorPosition(0, 0); "
+        "[Console]::SetCursorPosition(0, $progressRow); "
         "[Console]::Write($progressLine); "
         "[Console]::SetCursorPosition($cursorLeft, $cursorTop) "
         "}}; "
@@ -372,7 +389,15 @@ def run_tray(log_file):
         except OSError as error:
             LOGGER.error("Could not open the log window: %s", error)
 
-    def exit_app(icon, _item):
+    def clear_log_action(_icon, _item):
+        try:
+            clear_log_file(log_file)
+        except (OSError, RuntimeError) as error:
+            LOGGER.error("Could not clear the log file: %s", error)
+        else:
+            LOGGER.info("Log cleared by user.")
+
+    def kill_app(icon, _item):
         LOGGER.info("Stopping by user request.")
         stop_event.set()
         resume_event.set()
@@ -384,9 +409,10 @@ def run_tray(log_file):
         "Twitch Live Organizer",
         menu=pystray.Menu(
             pystray.MenuItem("Open log", show_log),
+            pystray.MenuItem("Clear Log", clear_log_action),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(pause_text, toggle_pause),
-            pystray.MenuItem("Exit", exit_app),
+            pystray.MenuItem("Kill", kill_app),
         ),
     )
 

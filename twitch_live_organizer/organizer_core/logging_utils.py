@@ -9,6 +9,19 @@ class ProgressFileHandler(logging.FileHandler):
         super().__init__(filename, encoding=encoding)
         self.progress_offset = None
 
+    def clear_log(self):
+        self.acquire()
+        try:
+            if self.stream is None:
+                raise RuntimeError("Cannot clear a closed log file.")
+            self.flush()
+            self.stream.seek(0)
+            self.stream.truncate()
+            self.flush()
+            self.progress_offset = None
+        finally:
+            self.release()
+
     def write_progress(self, record, complete=False):
         self.acquire()
         try:
