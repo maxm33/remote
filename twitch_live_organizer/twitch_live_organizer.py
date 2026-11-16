@@ -113,6 +113,7 @@ if not isinstance(CATEGORY_TO_DIRECTORY, dict) or not all(
 API_BASE = "https://api.twitch.tv/helix"
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 STARTUP_FILE_NAME = "TwitchLiveOrganizer.cmd"
+DOWNLOAD_STAGING_DIRECTORY_NAME = ".twitch-live-organizer-downloads"
 LOGGER = logging.getLogger("twitch_live_organizer")
 LOG_FILE_NAME = "organizer.log"
 
@@ -284,12 +285,13 @@ def configure_logging():
 def open_log(log_file):
     escaped_path = str(log_file).replace("'", "''")
     command = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
         "$logPath = '{}'; $lastWrite = [datetime]::MinValue; "
         "while ($true) {{ "
         "$writeTime = [System.IO.File]::GetLastWriteTimeUtc($logPath); "
         "if ($writeTime -ne $lastWrite) {{ "
         "Clear-Host; "
-        "Get-Content -LiteralPath $logPath -Tail 100 | "
+        "Get-Content -LiteralPath $logPath -Tail 100 -Encoding UTF8 | "
         "ForEach-Object {{ Write-Host $_.TrimEnd() }}; "
         "$lastWrite = $writeTime "
         "}}; Start-Sleep -Milliseconds 250 }}"
@@ -445,7 +447,16 @@ def download_archive_video(video, stop_event, resume_event):
         "format": "best[ext=mp4]/best",
         "merge_output_format": "mp4",
         "noplaylist": True,
-        "outtmpl": str(WATCH_FOLDER / "%(id)s-%(title)s.%(ext)s"),
+        # Download and post-process (the ffmpeg fixup) inside a staging subfolder.
+        # yt-dlp moves the finished file into the watch folder only after every
+        # step is done, so the folder watcher never sees a file still in use.
+        # The staging folder is on the same drive, so that final move is instant.
+        "paths": {
+            "home": str(WATCH_FOLDER),
+            "temp": str(WATCH_FOLDER / DOWNLOAD_STAGING_DIRECTORY_NAME),
+        },
+        # Must stay relative: an absolute template would bypass "paths".
+        "outtmpl": "%(id)s-%(title)s.%(ext)s",
         "quiet": True,
         "logger": YtDlpLogger(),
         "progress_hooks": [pause_download],
@@ -526,12 +537,25 @@ def watch_archives(stop_event, resume_event):
                     None,
                 )
                 if marker_index is None:
-                    LOGGER.warning(
-                        "Saved archive marker %s was not found for %s; "
-                        "not downloading older VODs.",
-                        last_video_id,
-                        CHANNEL_LOGIN,
-                    )
+                    missing_video_id = last_video_id
+                    last_video_id = videos[0]["id"] if videos else None
+                    save_archive_state(state_path, last_video_id)
+                    if last_video_id is None:
+                        LOGGER.warning(
+                            "Saved archive marker %s was not found for %s and the "
+                            "channel has no VODs; waiting for its next archive.",
+                            missing_video_id,
+                            CHANNEL_LOGIN,
+                        )
+                    else:
+                        LOGGER.warning(
+                            "Saved archive marker %s was not found for %s; using "
+                            "the latest VOD %s as the new marker without "
+                            "downloading older VODs.",
+                            missing_video_id,
+                            CHANNEL_LOGIN,
+                            last_video_id,
+                        )
                     video_to_download = None
                 else:
                     video_to_download = (
