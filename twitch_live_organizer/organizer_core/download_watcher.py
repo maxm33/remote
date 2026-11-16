@@ -191,13 +191,14 @@ def download_archive_video(
     return downloaded_paths
 
 
-def _validated_download_path(path, download_directory, allow_legacy=False):
+def _validated_download_path(path, download_directory):
     path = Path(path)
     if not path.is_absolute():
         path = Path(download_directory) / path
     path = path.resolve()
-    if path.suffix.lower() != ".mp4" or (
-        path.parent != Path(download_directory).resolve() and not allow_legacy
+    if (
+        path.suffix.lower() != ".mp4"
+        or path.parent != Path(download_directory).resolve()
     ):
         raise RuntimeError(
             "Pending download is not an MP4 in the download staging directory: {}."
@@ -228,9 +229,7 @@ def watch(
     pending_downloads = [
         PendingDownload(
             pending.video_id,
-            _validated_download_path(
-                pending.path, download_directory, allow_legacy=True
-            ),
+            _validated_download_path(pending.path, download_directory),
         )
         for pending in pending_downloads
     ]

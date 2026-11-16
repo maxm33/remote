@@ -40,20 +40,6 @@ class DownloadWatcherTests(unittest.TestCase):
                     outside_path, staging_directory
                 )
 
-    def test_existing_pending_downloads_outside_staging_remain_supported(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            staging_directory = root / "staging"
-            staging_directory.mkdir()
-            legacy_path = root / "old-watch-folder" / "video-1-Game.mp4"
-
-            self.assertEqual(
-                download_watcher._validated_download_path(
-                    legacy_path, staging_directory, allow_legacy=True
-                ),
-                legacy_path.resolve(),
-            )
-
     def test_completed_output_hook_reports_final_mp4(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             staging_directory = Path(temporary_directory) / ".staging"
