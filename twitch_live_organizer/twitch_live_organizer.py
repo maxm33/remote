@@ -316,7 +316,7 @@ def watch_for_updates(stop_event):
         )
         return
 
-    LOGGER.info("Checking for Git updates on startup and every hour.")
+    LOGGER.info("Checking for Git updates every hour.")
 
     def check_for_updates():
         try:
