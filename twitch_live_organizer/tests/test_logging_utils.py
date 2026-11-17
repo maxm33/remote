@@ -2,11 +2,32 @@ import logging
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from twitch_live_organizer import twitch_live_organizer
 from twitch_live_organizer.organizer_core.logging_utils import ProgressFileHandler
 
 
 class ProgressFileHandlerTests(unittest.TestCase):
+    def test_log_window_closes_when_organizer_process_exits(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            log_path = Path(temporary_directory) / "organizer.log"
+            with mock.patch.object(twitch_live_organizer.subprocess, "Popen") as popen:
+                twitch_live_organizer.open_log(log_path)
+
+        arguments = popen.call_args.args[0]
+        command = arguments[arguments.index("-Command") + 1]
+        self.assertNotIn("-NoExit", arguments)
+        self.assertIn(
+            "while (Get-Process -Id $organizerProcessId "
+            "-ErrorAction SilentlyContinue)",
+            command,
+        )
+        self.assertIn(
+            "$organizerProcessId = {}".format(twitch_live_organizer.os.getpid()),
+            command,
+        )
+
     def test_clear_log_removes_progress_and_resets_progress_offset(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             log_path = Path(temporary_directory) / "organizer.log"

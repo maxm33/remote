@@ -193,13 +193,16 @@ def clear_log_file(log_file):
 
 def open_log(log_file):
     escaped_path = str(log_file).replace("'", "''")
+    organizer_pid = os.getpid()
     command = (
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
         "$logPath = '{0}'; "
+        "$organizerProcessId = {2}; "
         "$lastWrite = [datetime]::MinValue; $lastLength = -1L; "
         "$lastWidth = -1; $lastHeight = -1; "
         "$progressPattern = ' INFO VOD .* download: \\['; "
-        "while ($true) {{ "
+        "while (Get-Process -Id $organizerProcessId "
+        "-ErrorAction SilentlyContinue) {{ "
         "$writeTime = [System.IO.File]::GetLastWriteTimeUtc($logPath); "
         "$length = (Get-Item -LiteralPath $logPath).Length; "
         "if ($writeTime -ne $lastWrite) {{ "
@@ -289,9 +292,11 @@ def open_log(log_file):
         "$lastWrite = $writeTime; $lastLength = $length; "
         "$lastWidth = $windowWidth; $lastHeight = $windowHeight "
         "}}; Start-Sleep -Milliseconds 250 }}"
-    ).format(escaped_path, ProgressFileHandler.PROGRESS_LINE_WIDTH)
+    ).format(
+        escaped_path, ProgressFileHandler.PROGRESS_LINE_WIDTH, organizer_pid
+    )
     subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-NoExit", "-Command", command],
+        ["powershell.exe", "-NoProfile", "-Command", command],
         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
     )
 
@@ -307,6 +312,7 @@ def watch_for_updates(stop_event):
             stderr=subprocess.PIPE,
             text=True,
             timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         repository_root = Path(result.stdout.strip())
     except (OSError, subprocess.SubprocessError) as error:
@@ -328,6 +334,7 @@ def watch_for_updates(stop_event):
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             ).stdout.strip()
             pull_result = subprocess.run(
                 ["git", "pull", "--ff-only"],
@@ -336,6 +343,7 @@ def watch_for_updates(stop_event):
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=120,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if pull_result.returncode:
                 details = pull_result.stderr.strip() or pull_result.stdout.strip()
@@ -352,6 +360,7 @@ def watch_for_updates(stop_event):
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             ).stdout.strip()
             if current_commit != previous_commit:
                 LOGGER.info(
@@ -460,6 +469,7 @@ def run_tray(log_file):
         "Twitch Live Organizer",
         menu=pystray.Menu(
             pystray.MenuItem("Open log", show_log),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("Clear log", clear_log_action),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(pause_text, toggle_pause),
