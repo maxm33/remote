@@ -48,6 +48,40 @@ if errorlevel 1 (
 :python_ready
 for /f "delims=" %%V in ('py -3 --version 2^>^&1') do echo [ok] %%V
 
+echo [..] Checking FFmpeg...
+where ffmpeg >nul 2>&1
+if errorlevel 1 (
+    where winget >nul 2>&1
+    if errorlevel 1 (
+        echo [error] FFmpeg is not available and winget was not found.
+        echo         Install FFmpeg manually and make sure ffmpeg.exe is on PATH.
+        goto :error
+    )
+
+    echo [..] Installing FFmpeg...
+    winget install -e --id Gyan.FFmpeg --scope user --accept-package-agreements --accept-source-agreements
+    if errorlevel 1 (
+        echo [error] Could not install FFmpeg.
+        goto :error
+    )
+
+    echo [..] Adding WinGet's FFmpeg command directory to the user PATH...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $links = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'; if (-not (Test-Path -LiteralPath (Join-Path $links 'ffmpeg.exe'))) { throw 'WinGet did not create the FFmpeg command link.' }; $userPath = [Environment]::GetEnvironmentVariable('Path', 'User'); $entries = @($userPath -split ';' | Where-Object { $_ }); if (-not ($entries | Where-Object { $_.TrimEnd('\') -ieq $links.TrimEnd('\') })) { $entries += $links; [Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User') }"
+    if errorlevel 1 (
+        echo [error] Could not add FFmpeg to the user PATH.
+        goto :error
+    )
+
+    for /f "usebackq delims=" %%P in (`powershell.exe -NoProfile -Command "$parts = @($env:Path, [Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User')) -join ';'; [string]::Join(';', [string[]]($parts -split ';' | Where-Object { $_ } | Select-Object -Unique))"`) do set "PATH=%%P"
+)
+
+where ffmpeg >nul 2>&1
+if errorlevel 1 (
+    echo [error] FFmpeg installation completed, but ffmpeg.exe is still not on PATH.
+    goto :error
+)
+echo [ok] FFmpeg is available on PATH.
+
 echo [..] Installing tray dependencies...
 py -3 -m pip install --user -r requirements.txt
 if errorlevel 1 (

@@ -125,6 +125,7 @@ class DownloadWatcherTests(unittest.TestCase):
             self.assertEqual(
                 options_seen["paths"]["temp"], str(staging_directory / ".tmp")
             )
+            self.assertEqual(options_seen["fixup"], "detect_or_warn")
 
     def test_failed_file_move_is_retried_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

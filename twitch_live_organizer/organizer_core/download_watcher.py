@@ -158,6 +158,7 @@ def download_archive_video(
 
     options = {
         "format": "best[ext=mp4]/best",
+        "fixup": "detect_or_warn",
         "merge_output_format": "mp4",
         "noplaylist": True,
         "paths": {
