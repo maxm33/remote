@@ -460,7 +460,7 @@ def run_tray(log_file):
         "Twitch Live Organizer",
         menu=pystray.Menu(
             pystray.MenuItem("Open log", show_log),
-            pystray.MenuItem("Clear Log", clear_log_action),
+            pystray.MenuItem("Clear log", clear_log_action),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(pause_text, toggle_pause),
             pystray.MenuItem("Kill", kill_app),
