@@ -15,6 +15,34 @@ from .twitch_api import (
 POLL_SECONDS = 15
 ARCHIVE_POLL_SECONDS = 60
 DOWNLOAD_STAGING_DIRECTORY_NAME = ".twitch-live-organizer-downloads"
+_FILE_ATTRIBUTE_HIDDEN = 0x2
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+
+
+def _prepare_download_directory(download_directory):
+    download_directory = Path(download_directory)
+    download_directory.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_attributes = kernel32.GetFileAttributesW
+        get_attributes.argtypes = (wintypes.LPCWSTR,)
+        get_attributes.restype = wintypes.DWORD
+        set_attributes = kernel32.SetFileAttributesW
+        set_attributes.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
+        set_attributes.restype = wintypes.BOOL
+
+        path = str(download_directory.resolve())
+        attributes = get_attributes(path)
+        if attributes == _INVALID_FILE_ATTRIBUTES:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not attributes & _FILE_ATTRIBUTE_HIDDEN and not set_attributes(
+            path, attributes | _FILE_ATTRIBUTE_HIDDEN
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+    return download_directory
 
 
 class YtDlpLogger:
@@ -99,8 +127,7 @@ def download_archive_video(
     terminal_progress = sys.stdout is not None and sys.stdout.isatty()
     last_progress_length = [0]
     downloaded_paths = []
-    download_directory = Path(download_directory)
-    download_directory.mkdir(parents=True, exist_ok=True)
+    download_directory = _prepare_download_directory(download_directory)
     temporary_directory = download_directory / ".tmp"
 
     def pause_download(status):
@@ -231,8 +258,9 @@ def watch(
 ):
     twitch = TwitchClient(client_id, client_secret)
     state_path = Path(archive_state_path)
-    download_directory = Path(download_directory).resolve()
-    download_directory.mkdir(parents=True, exist_ok=True)
+    download_directory = _prepare_download_directory(
+        Path(download_directory).resolve()
+    )
     initialized, last_video_id, pending_downloads = load_archive_state(state_path)
     pending_downloads = [
         PendingDownload(

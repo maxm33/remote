@@ -28,6 +28,21 @@ class TwitchStub:
 
 
 class DownloadWatcherTests(unittest.TestCase):
+    def test_prepares_hidden_download_directory(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            staging_directory = Path(temporary_directory) / "staging"
+
+            prepared_directory = download_watcher._prepare_download_directory(
+                staging_directory
+            )
+
+            self.assertEqual(prepared_directory, staging_directory)
+            self.assertTrue(staging_directory.is_dir())
+            if sys.platform == "win32":
+                self.assertTrue(
+                    staging_directory.stat().st_file_attributes & 0x2
+                )
+
     def test_pending_paths_must_be_mp4s_in_the_staging_directory(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
