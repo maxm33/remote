@@ -193,6 +193,7 @@ def download_archive_video(
                 video_id, result
             )
         )
+    finish_download_progress(logger, video_id, "download complete.")
     release_download_progress(logger)
     logger.info("Finished downloading Twitch VOD %s.", video_id)
     return downloaded_paths

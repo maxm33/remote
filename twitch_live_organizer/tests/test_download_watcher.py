@@ -80,28 +80,47 @@ class DownloadWatcherTests(unittest.TestCase):
                 utils=SimpleNamespace(DownloadError=FakeDownloadError),
             )
             reported_paths = []
-            progress_messages = []
+            events = []
             resume_event = threading.Event()
             resume_event.set()
+
+            def record_progress(_logger, message, complete=False):
+                events.append(("progress", message, complete))
+
+            class CaptureHandler(logging.Handler):
+                def emit(self, record):
+                    events.append(("log", record.getMessage()))
+
+            logger = logging.Logger("test-yt-dlp-success", logging.INFO)
+            logger.addHandler(CaptureHandler())
+
             with mock.patch.dict(
                 sys.modules, {"yt_dlp": fake_yt_dlp}
             ), mock.patch.object(
                 download_watcher,
                 "log_download_progress",
-                side_effect=lambda _logger, message: progress_messages.append(message),
+                side_effect=record_progress,
             ):
                 result = download_watcher.download_archive_video(
                     {"id": "video-1", "title": "Game"},
                     threading.Event(),
                     resume_event,
                     staging_directory,
-                    logging.getLogger("test-yt-dlp"),
+                    logger,
                     lambda _video_id, path: reported_paths.append(path),
                 )
 
             self.assertEqual(result, [output])
             self.assertEqual(reported_paths, [output])
-            self.assertIn("ETA 03:02:07", progress_messages[0])
+            progress_event = next(event for event in events if event[0] == "progress")
+            self.assertIn("ETA 03:02:07", progress_event[1])
+            self.assertEqual(
+                events[-2:],
+                [
+                    ("progress", "VOD video-1 download complete.", True),
+                    ("log", "Finished downloading Twitch VOD video-1."),
+                ],
+            )
             self.assertEqual(options_seen["paths"]["home"], str(staging_directory))
             self.assertEqual(
                 options_seen["paths"]["temp"], str(staging_directory / ".tmp")
