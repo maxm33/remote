@@ -316,8 +316,9 @@ def watch_for_updates(stop_event):
         )
         return
 
-    LOGGER.info("Checking for Git updates every hour.")
-    while not stop_event.wait(UPDATE_CHECK_SECONDS):
+    LOGGER.info("Checking for Git updates on startup and every hour.")
+
+    def check_for_updates():
         try:
             previous_commit = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -341,7 +342,7 @@ def watch_for_updates(stop_event):
                 LOGGER.warning(
                     "Git pull failed; will retry at the next check: %s", details
                 )
-                continue
+                return
 
             current_commit = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -364,6 +365,11 @@ def watch_for_updates(stop_event):
             LOGGER.error(
                 "Git update check failed; will retry at the next check: %s", error
             )
+
+    if not stop_event.is_set():
+        check_for_updates()
+    while not stop_event.wait(UPDATE_CHECK_SECONDS):
+        check_for_updates()
 
 
 def start_update_watcher(stop_event):
