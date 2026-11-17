@@ -59,6 +59,15 @@ class DownloadWatcherTests(unittest.TestCase):
                     return False
 
                 def download(self, _urls):
+                    for hook in options_seen["progress_hooks"]:
+                        hook(
+                            {
+                                "status": "downloading",
+                                "downloaded_bytes": 1,
+                                "total_bytes": 10,
+                                "eta": 10927,
+                            }
+                        )
                     for hook in options_seen["post_hooks"]:
                         hook(str(output))
                     return 0
@@ -71,9 +80,16 @@ class DownloadWatcherTests(unittest.TestCase):
                 utils=SimpleNamespace(DownloadError=FakeDownloadError),
             )
             reported_paths = []
+            progress_messages = []
             resume_event = threading.Event()
             resume_event.set()
-            with mock.patch.dict(sys.modules, {"yt_dlp": fake_yt_dlp}):
+            with mock.patch.dict(
+                sys.modules, {"yt_dlp": fake_yt_dlp}
+            ), mock.patch.object(
+                download_watcher,
+                "log_download_progress",
+                side_effect=lambda _logger, message: progress_messages.append(message),
+            ):
                 result = download_watcher.download_archive_video(
                     {"id": "video-1", "title": "Game"},
                     threading.Event(),
@@ -85,6 +101,7 @@ class DownloadWatcherTests(unittest.TestCase):
 
             self.assertEqual(result, [output])
             self.assertEqual(reported_paths, [output])
+            self.assertIn("ETA 03:02:07", progress_messages[0])
             self.assertEqual(options_seen["paths"]["home"], str(staging_directory))
             self.assertEqual(
                 options_seen["paths"]["temp"], str(staging_directory / ".tmp")

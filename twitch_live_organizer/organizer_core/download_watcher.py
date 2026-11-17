@@ -39,6 +39,13 @@ def format_bytes(size):
         value /= 1024
 
 
+def format_eta(seconds):
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return "{:02d}:{:02d}:{:02d}".format(hours, minutes, seconds)
+
+
 def log_download_progress(logger, message, complete=False):
     record = logger.makeRecord(
         logger.name, logging.INFO, __file__, 0, message, (), None
@@ -125,7 +132,7 @@ def download_archive_video(
         eta = status.get("eta")
         eta_text = ""
         if eta is not None:
-            eta_text = " (ETA {:02d}:{:02d})".format(int(eta) // 60, int(eta) % 60)
+            eta_text = " (ETA {})".format(format_eta(eta))
         message = "VOD {} download: [{}] {}{}{}".format(
             video_id,
             bar,
