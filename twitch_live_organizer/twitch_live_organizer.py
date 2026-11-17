@@ -317,12 +317,12 @@ def watch_for_updates(stop_event):
         repository_root = Path(result.stdout.strip())
     except (OSError, subprocess.SubprocessError) as error:
         LOGGER.warning(
-            "Automatic updates unavailable: could not locate Git repository: %s",
+            "Automatic updates unavailable: %s",
             error,
         )
         return
 
-    LOGGER.info("Checking for Git updates every hour.")
+    LOGGER.info("Checking for updates...")
 
     def check_for_updates():
         try:
@@ -348,7 +348,7 @@ def watch_for_updates(stop_event):
             if pull_result.returncode:
                 details = pull_result.stderr.strip() or pull_result.stdout.strip()
                 LOGGER.warning(
-                    "Git pull failed; will retry at the next check: %s", details
+                    "Update pull failed; will retry at the next hourly check: %s", details
                 )
                 return
 
@@ -364,15 +364,13 @@ def watch_for_updates(stop_event):
             ).stdout.strip()
             if current_commit != previous_commit:
                 LOGGER.info(
-                    "Updated from commit %.12s to %.12s; restarting.",
-                    previous_commit,
-                    current_commit,
+                    "Updated found and applied; restarting.",
                 )
                 os.execv(sys.executable, [sys.executable] + sys.argv)
-            LOGGER.info("No Git updates available.")
+            LOGGER.info("No updates available.")
         except (OSError, subprocess.SubprocessError) as error:
             LOGGER.error(
-                "Git update check failed; will retry at the next check: %s", error
+                "Update check failed; will retry at the next hourly check: %s", error
             )
 
     if not stop_event.is_set():
