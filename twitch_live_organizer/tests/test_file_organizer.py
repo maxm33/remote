@@ -60,6 +60,19 @@ class FileOrganizerTests(unittest.TestCase):
 
         self.assertTrue((self.destination_directory / "Games #101.mp4").exists())
 
+    def test_processes_download_named_after_destination_directory(self):
+        organizer = FileOrganizer(
+            self.output_root,
+            {"Indiemaking": "Indie Making"},
+            logging.getLogger("test-organizer-directory-title"),
+        )
+        source = self.make_source("12345-Indie Making.mp4")
+
+        self.assertTrue(organizer.process_file(source))
+        self.assertTrue(
+            (self.output_root / "Indie Making" / "Indie Making #1.mp4").exists()
+        )
+
     def test_cross_device_collision_does_not_delete_existing_destination(self):
         source = self.make_source("source.mp4")
         destination = self.root / "destination.mp4"

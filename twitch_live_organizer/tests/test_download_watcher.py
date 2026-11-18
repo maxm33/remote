@@ -28,6 +28,124 @@ class TwitchStub:
 
 
 class DownloadWatcherTests(unittest.TestCase):
+    def test_unmatched_new_vod_advances_marker_without_downloading(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            state_path = root / "archive-state.json"
+            save_archive_state(state_path, "video-1", [])
+
+            class UnmatchedVideoTwitchStub:
+                def __init__(self, *_args):
+                    pass
+
+                def user_id_by_login(self, _login):
+                    return "channel-id"
+
+                def archived_videos(self, _user_id, known_video_id=None):
+                    return [
+                        {
+                            "id": "video-2",
+                            "title": "Uncategorized stream",
+                        },
+                        {"id": known_video_id, "title": "Game"},
+                    ]
+
+            class StopAfterWait:
+                stopped = False
+
+                def is_set(self):
+                    return self.stopped
+
+                def wait(self, _timeout=None):
+                    self.stopped = True
+                    return True
+
+            stop_event = StopAfterWait()
+            resume_event = threading.Event()
+            resume_event.set()
+            logger = logging.getLogger("test-unmatched-new-vod")
+            logger.addHandler(logging.NullHandler())
+
+            with mock.patch.object(
+                download_watcher, "TwitchClient", UnmatchedVideoTwitchStub
+            ), mock.patch.object(
+                download_watcher, "download_archive_video"
+            ) as download_mock:
+                download_watcher.watch(
+                    stop_event,
+                    resume_event,
+                    client_id="client",
+                    client_secret="secret",
+                    channel_login="channel",
+                    download_directory=root / "staging",
+                    output_root=root / "output",
+                    category_to_directory={"Game": "Games"},
+                    archive_state_path=state_path,
+                    logger=logger,
+                )
+
+            self.assertFalse(download_mock.called)
+            self.assertEqual(load_archive_state(state_path), (True, "video-2", []))
+
+    def test_matched_vod_uses_destination_directory_as_download_title(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            state_path = root / "archive-state.json"
+            save_archive_state(state_path, "1001", [])
+
+            class MatchedVideoTwitchStub:
+                def __init__(self, *_args):
+                    pass
+
+                def user_id_by_login(self, _login):
+                    return "channel-id"
+
+                def archived_videos(self, _user_id, known_video_id=None):
+                    return [
+                        {"id": "1002", "title": "Indiemaking stream"},
+                        {"id": known_video_id, "title": "Older stream"},
+                    ]
+
+            class StopAfterWait:
+                stopped = False
+
+                def is_set(self):
+                    return self.stopped
+
+                def wait(self, _timeout=None):
+                    self.stopped = True
+                    return True
+
+            stop_event = StopAfterWait()
+            resume_event = threading.Event()
+            resume_event.set()
+            logger = logging.getLogger("test-matched-vod-title")
+            logger.addHandler(logging.NullHandler())
+
+            with mock.patch.object(
+                download_watcher, "TwitchClient", MatchedVideoTwitchStub
+            ), mock.patch.object(
+                download_watcher,
+                "download_archive_video",
+                return_value=[root / "1002-Indie Making.mp4"],
+            ) as download_mock:
+                download_watcher.watch(
+                    stop_event,
+                    resume_event,
+                    client_id="client",
+                    client_secret="secret",
+                    channel_login="channel",
+                    download_directory=root / "staging",
+                    output_root=root / "output",
+                    category_to_directory={"Indiemaking": "Indie Making"},
+                    archive_state_path=state_path,
+                    logger=logger,
+                )
+
+            self.assertEqual(
+                download_mock.call_args.kwargs["output_title"], "Indie Making"
+            )
+
     def test_prepares_hidden_download_directory(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             staging_directory = Path(temporary_directory) / "staging"
@@ -123,6 +241,7 @@ class DownloadWatcherTests(unittest.TestCase):
                     staging_directory,
                     logger,
                     lambda _video_id, path: reported_paths.append(path),
+                    output_title="Games",
                 )
 
             self.assertEqual(result, [output])
@@ -137,6 +256,7 @@ class DownloadWatcherTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(options_seen["paths"]["home"], str(staging_directory))
+            self.assertEqual(options_seen["outtmpl"], "%(id)s-Games%(ext)s")
             self.assertEqual(
                 options_seen["paths"]["temp"], str(staging_directory / ".tmp")
             )

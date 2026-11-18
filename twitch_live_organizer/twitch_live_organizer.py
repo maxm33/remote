@@ -510,7 +510,25 @@ def validate_configuration():
             "Add at least one category mapping to 'category_to_directory' in {}."
             .format(CONFIG_PATH)
         )
-    for directory_name in CATEGORY_TO_DIRECTORY.values():
+
+    category_names = {}
+    for category in CATEGORY_TO_DIRECTORY:
+        if not category.strip():
+            raise RuntimeError(
+                "Category names in 'category_to_directory' cannot be empty."
+            )
+        category_key = category.casefold()
+        if category_key in category_names:
+            raise RuntimeError(
+                "Category names in 'category_to_directory' must be unique "
+                "ignoring case: {!r} and {!r}.".format(
+                    category_names[category_key], category
+                )
+            )
+        category_names[category_key] = category
+
+    directory_names = {}
+    for category, directory_name in CATEGORY_TO_DIRECTORY.items():
         relative_directory = Path(directory_name)
         if (
             not directory_name
@@ -524,6 +542,17 @@ def validate_configuration():
                 "Category directory paths must be relative to output_root and "
                 "must not escape it: {!r}".format(directory_name)
             )
+        directory_key = relative_directory.name.casefold()
+        if directory_key in directory_names:
+            raise RuntimeError(
+                "Category directories in 'category_to_directory' must have "
+                "unique names ignoring case: {!r} and {!r} both use {!r}.".format(
+                    directory_names[directory_key],
+                    category,
+                    relative_directory.name,
+                )
+            )
+        directory_names[directory_key] = category
 
 
 def main():

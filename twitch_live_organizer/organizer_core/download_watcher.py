@@ -96,16 +96,6 @@ def finish_download_progress(logger, video_id, message):
     log_download_progress(logger, "VOD {} {}".format(video_id, message), complete=True)
 
 
-def release_download_progress(logger):
-    for handler in logger.handlers:
-        if isinstance(handler, ProgressFileHandler):
-            handler.acquire()
-            try:
-                handler.progress_offset = None
-            finally:
-                handler.release()
-
-
 def download_archive_video(
     video,
     stop_event,
@@ -113,6 +103,7 @@ def download_archive_video(
     download_directory,
     logger,
     on_download,
+    output_title=None,
 ):
     try:
         import yt_dlp
@@ -129,6 +120,11 @@ def download_archive_video(
     downloaded_paths = []
     download_directory = _prepare_download_directory(download_directory)
     temporary_directory = download_directory / ".tmp"
+    output_title_template = (
+        "%(title)s"
+        if output_title is None
+        else output_title.replace("%", "%%")
+    )
 
     def pause_download(status):
         while not stop_event.is_set() and not resume_event.wait(timeout=0.5):
@@ -192,13 +188,17 @@ def download_archive_video(
             "home": str(download_directory),
             "temp": str(temporary_directory),
         },
-        "outtmpl": "%(id)s-%(title)s.%(ext)s",
+        "outtmpl": "%(id)s-{}%(ext)s".format(output_title_template),
         "quiet": True,
         "logger": YtDlpLogger(logger),
         "progress_hooks": [pause_download],
         "post_hooks": [record_download],
     }
-    logger.info("Downloading Twitch VOD %s: %s", video_id, video.get("title", ""))
+    logger.info(
+        "Downloading Twitch VOD %s: %s",
+        video_id,
+        output_title if output_title is not None else video.get("title", ""),
+    )
     try:
         with yt_dlp.YoutubeDL(options) as downloader:
             result = downloader.download([video_url])
@@ -222,7 +222,6 @@ def download_archive_video(
             )
         )
     finish_download_progress(logger, video_id, "download complete.")
-    release_download_progress(logger)
     logger.info("Finished downloading Twitch VOD %s.", video_id)
     return downloaded_paths
 
@@ -381,6 +380,26 @@ def watch(
                             videos[marker_index - 1] if marker_index > 0 else None
                         )
 
+                output_title = None
+                if video_to_download is not None:
+                    category = file_organizer.category_from_title(
+                        video_to_download.get("title")
+                    )
+                    if category is None:
+                        last_video_id = video_to_download["id"]
+                        persist_state()
+                        logger.info(
+                            "Skipping Twitch VOD %s: no configured category matched "
+                            "title %r; advancing the archive marker.",
+                            last_video_id,
+                            video_to_download.get("title", ""),
+                        )
+                        video_to_download = None
+                    else:
+                        output_title = Path(
+                            category_to_directory[category]
+                        ).name
+
                 if (
                     initialized
                     and not stop_event.is_set()
@@ -394,6 +413,7 @@ def watch(
                         download_directory,
                         logger,
                         record_download,
+                        output_title=output_title,
                     )
                     if not any(
                         path.suffix.lower() == ".mp4" for path in downloaded_paths

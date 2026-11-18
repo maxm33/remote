@@ -74,7 +74,7 @@ class FileOrganizer:
             if key[0] == directory_key:
                 self._next_ids[key] = (next_id, directory_mtime)
 
-    def _category_from_title(self, title):
+    def category_from_title(self, title):
         if not isinstance(title, str):
             return None
         title_folded = title.casefold()
@@ -82,6 +82,17 @@ class FileOrganizer:
             category
             for category in self.category_to_directory
             if category.casefold() in title_folded
+        )
+        return max(matches, key=len, default=None)
+
+    def _category_from_directory_name(self, title):
+        if not isinstance(title, str):
+            return None
+        title_folded = title.casefold()
+        matches = (
+            category
+            for category, directory in self.category_to_directory.items()
+            if Path(directory).name.casefold() == title_folded
         )
         return max(matches, key=len, default=None)
 
@@ -98,7 +109,9 @@ class FileOrganizer:
             )
             return False
 
-        category = self._category_from_title(title)
+        category = self.category_from_title(title)
+        if category is None:
+            category = self._category_from_directory_name(title)
         if category is None:
             destination_directory = self.output_root
             destination_name = title
