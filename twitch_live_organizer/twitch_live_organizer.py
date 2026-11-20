@@ -364,7 +364,7 @@ def watch_for_updates(stop_event):
             ).stdout.strip()
             if current_commit != previous_commit:
                 LOGGER.info(
-                    "Updated found and applied; restarting.",
+                    "Update found and applied; restarting.",
                 )
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             LOGGER.info("No updates available.")
